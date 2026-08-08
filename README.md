@@ -5,6 +5,8 @@ that takes raw PCM audio over UDP, encodes it to Opus, and broadcasts it to
 browsers over WebSocket — with JWT authentication and a native WebCodecs
 client.
 
+**[Live demo](https://yo6nam.github.io/OpusRelay/example.html)**
+
 ## Why zero external dependencies?
 
 WebSocket implemented natively in the stdlib (RFC 6455), Opus via
@@ -45,6 +47,67 @@ is designed for PTT-style traffic (svxlink, Asterisk with VAD) — for a
 continuous 24/7 stream, the "someone is talking" indicator fires once and
 essentially never returns to "stop"; this doesn't affect the audio itself,
 only that one visual indicator in the client.
+
+---
+
+## SVXLink configuration
+
+If your audio source is svxlink itself (rather than one of the generic
+`ffmpeg` pipelines above), svxlink can send audio directly to OpusRelay's
+UDP listener using its built-in `Multi` transmitter type — no external
+piping needed. Add a virtual transmitter that mirrors your existing
+logic's audio to `127.0.0.1:1235` (or wherever `-pcmport` points):
+
+```ini
+[SimplexLogic]
+...
+TX=MultiTx
+
+[MultiTx]
+TYPE=Multi
+TRANSMITTERS=Tx1,TxUDP
+
+[TxUDP]
+TYPE=Local
+AUDIO_DEV=udp:127.0.0.1:1235
+LIMITER_THRESH=0
+AUDIO_CHANNEL=0
+PTT_TYPE=NONE
+TIMEOUT=3600
+TX_DELAY=0
+```
+
+What each part does:
+
+- **`[SimplexLogic]`** — use whatever your actual logic section is called
+  (`RepeaterLogic`, etc.); just point its `TX=` at the new `MultiTx`
+  instead of your real transmitter directly.
+- **`[MultiTx]`** — a `TYPE=Multi` transmitter fans audio out to several
+  real/virtual transmitters at once. `TRANSMITTERS=Tx1,TxUDP` keeps your
+  existing transmitter (`Tx1` — replace with its actual section name)
+  working exactly as before, and adds the new virtual one alongside it, so
+  RF transmission is unaffected.
+- **`[TxUDP]`** — the virtual transmitter that feeds OpusRelay:
+  - `AUDIO_DEV=udp:127.0.0.1:1235` — svxlink's native UDP audio output,
+    pointed at the same host/port as `-pcmport` (default `1235`).
+  - `LIMITER_THRESH=0` — disables the audio limiter for this output, so
+    OpusRelay gets unprocessed audio rather than a compressed/limited
+    signal meant for RF.
+  - `PTT_TYPE=NONE` — no PTT hardware to key; this transmitter is
+    UDP-only.
+  - `TIMEOUT=3600` — safety cutoff (1 hour) in case something keeps this
+    virtual transmitter keyed indefinitely.
+  - `TX_DELAY=0` — no artificial delay before audio starts.
+
+After editing `svxlink.conf`, restart the service:
+
+```bash
+systemctl restart svxlink
+```
+
+Then confirm audio is arriving by checking OpusRelay's own log for
+`Audio gap` messages disappearing while svxlink is transmitting, or by
+connecting with `example.html` and listening.
 
 ---
 
