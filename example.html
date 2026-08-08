@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>WebProxy — Opus client</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: #0b1220;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      padding: 20px;
+    }
+    .panel {
+      background: #111a2e;
+      border: 1px solid #1f2b47;
+      border-radius: 16px;
+      padding: 28px 30px;
+      width: 100%;
+      max-width: 440px;
+      box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+    }
+    h3 {
+      font-weight: 500;
+      letter-spacing: 0.3px;
+      margin-bottom: 18px;
+      text-align: center;
+      color: #c8d6f0;
+    }
+    .field {
+      margin-bottom: 14px;
+    }
+    .field label {
+      display: block;
+      font-size: 13px;
+      font-weight: 500;
+      color: #94a3b8;
+      margin-bottom: 4px;
+      letter-spacing: 0.2px;
+    }
+    .field input {
+      width: 100%;
+      padding: 10px 14px;
+      background: #0d162b;
+      border: 1px solid #253252;
+      border-radius: 10px;
+      color: #f0f4ff;
+      font-size: 14px;
+      outline: none;
+      transition: border 0.2s;
+    }
+    .field input:focus {
+      border-color: #4a7cff;
+      box-shadow: 0 0 0 3px rgba(74, 124, 255, 0.2);
+    }
+    .field input::placeholder {
+      color: #47577a;
+    }
+    .row {
+      display: flex;
+      gap: 12px;
+      margin-top: 18px;
+      align-items: center;
+      justify-content: center;
+    }
+    .btn {
+      border: none;
+      border-radius: 40px;
+      padding: 11px 24px;
+      font-weight: 600;
+      font-size: 14px;
+      cursor: pointer;
+      transition: 0.2s;
+      flex: 1;
+      letter-spacing: 0.2px;
+    }
+    .btn-success { background: #16a34a; color: white; }
+    .btn-success:hover { background: #15803d; }
+    .btn-danger  { background: #b91c1c; color: white; }
+    .btn-danger:hover { background: #991b1b; }
+    .btn-outline {
+      background: transparent;
+      border: 1px solid #2d3b5e;
+      color: #b0c4e8;
+    }
+    .btn-outline:hover { background: #1f2942; }
+    #peak-meter {
+      margin-top: 18px;
+      height: 44px;
+      display: none;
+      background: #0a1122;
+      border-radius: 8px;
+      overflow: hidden;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 13px;
+      color: #8ca3c9;
+      margin-top: 6px;
+      justify-content: center;
+      width: 100%;
+    }
+    .dot {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #47577a;
+      transition: 0.25s;
+    }
+    .dot.connected { background: #4ade80; box-shadow: 0 0 8px #4ade8066; }
+    .dot.connecting { background: #facc15; box-shadow: 0 0 8px #facc1566; animation: pulse 1s infinite; }
+    .dot.disconnected { background: #f87171; box-shadow: 0 0 8px #f8717166; }
+    @keyframes pulse {
+      0% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.4; transform: scale(0.85); }
+      100% { opacity: 1; transform: scale(1); }
+    }
+    .info-text {
+      font-size: 12px;
+      color: #5d6f96;
+      text-align: center;
+      margin-top: 12px;
+      border-top: 1px solid #1f2942;
+      padding-top: 14px;
+    }
+    .listener-count {
+      font-weight: 500;
+      color: #b7cdff;
+    }
+  </style>
+</head>
+<body>
+
+<div class="panel">
+  <h3>🎧 OpusRelay WebClient</h3>
+
+  <div class="field">
+    <label for="wsUrl">WebSocket URL</label>
+    <input type="text" id="wsUrl" placeholder="wss://example.net:8080/" value="wss://backup.rolink.network:8080/">
+  </div>
+
+  <div class="field">
+    <label for="tokenInput">Token <span style="color:#5d6f96;font-weight:400;">(optional if noauth)</span></label>
+    <input type="text" id="tokenInput" placeholder="JWT token or leave empty">
+  </div>
+
+  <div class="row">
+    <button id="togglePlayer" class="btn btn-success">Start</button>
+    <button id="resetBtn" class="btn btn-outline">↻ Reset</button>
+  </div>
+
+  <div class="status-badge">
+    <span class="dot" id="statusDot"></span>
+    <span id="statusLabel">Idle</span>
+    <span id="listenerInfo" style="margin-left:auto;font-weight:400;"></span>
+  </div>
+
+  <div id="peak-meter"></div>
+  <div class="info-text">
+    <span id="connectionInfo">not connected</span>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js"></script>
+<script src="https://esonderegger.github.io/web-audio-peak-meter/web-audio-peak-meter-3.1.0.min.js"></script>
+
+<script>
+(function() {
+  // DOM refs
+  const wsUrlInput = document.getElementById('wsUrl');
+  const tokenInput = document.getElementById('tokenInput');
+  const toggleBtn = document.getElementById('togglePlayer');
+  const resetBtn = document.getElementById('resetBtn');
+  const statusDot = document.getElementById('statusDot');
+  const statusLabel = document.getElementById('statusLabel');
+  const listenerInfo = document.getElementById('listenerInfo');
+  const connInfo = document.getElementById('connectionInfo');
+
+  // state
+  let isPlaying = false;
+  let ws = null;
+  let audioCtx = null;
+  let gainNode = null;
+  let peakMeter = null;
+  let opusDecoder = null;
+  let nextPlayTime = 0;
+  let timestamp = 0;
+  let reconnectTimer = null;
+  let currentListenerCount = 0;
+
+  // ---------- helpers ----------
+  function setStatus(state, msg) {
+    statusDot.className = 'dot';
+    if (state === 'connected') {
+      statusDot.classList.add('connected');
+      statusLabel.textContent = msg || 'Connected';
+    } else if (state === 'connecting') {
+      statusDot.classList.add('connecting');
+      statusLabel.textContent = msg || 'Connecting…';
+    } else if (state === 'reconnecting') {
+      statusDot.classList.add('connecting');
+      statusLabel.textContent = msg || 'Reconnecting…';
+    } else {
+      statusDot.classList.add('disconnected');
+      statusLabel.textContent = msg || 'Disconnected';
+    }
+  }
+
+  function updateListenerCount(count) {
+    currentListenerCount = count;
+    if (count !== undefined && count !== null) {
+      listenerInfo.textContent = `👥 ${count}`;
+    } else {
+      listenerInfo.textContent = '';
+    }
+    // also update button text
+    if (isPlaying) {
+      const base = 'Stop';
+      toggleBtn.textContent = count ? `Stop (${count})` : 'Stop';
+    }
+  }
+
+  function updateConnInfo(text) {
+    connInfo.textContent = text || '—';
+  }
+
+  // ---------- audio / decoder ----------
+  function initDecoder() {
+    if (opusDecoder && opusDecoder.state !== 'closed') {
+      try { opusDecoder.close(); } catch(_) {}
+      opusDecoder = null;
+    }
+    if (!('AudioDecoder' in window)) {
+      console.warn('WebCodecs not supported');
+      return false;
+    }
+    opusDecoder = new AudioDecoder({
+      output: (audioData) => {
+        if (!isPlaying || !audioCtx || !gainNode) {
+          audioData.close();
+          return;
+        }
+        const nFrames = audioData.numberOfFrames;
+        const buf = new Float32Array(nFrames);
+        audioData.copyTo(buf, { planeIndex: 0, format: 'f32' });
+        audioData.close();
+
+        const ab = audioCtx.createBuffer(1, nFrames, 48000);
+        ab.copyToChannel(buf, 0);
+
+        const now = audioCtx.currentTime;
+        if (nextPlayTime < now) nextPlayTime = now + 0.10;
+
+        const src = audioCtx.createBufferSource();
+        src.buffer = ab;
+        src.connect(gainNode);
+        src.start(nextPlayTime);
+        nextPlayTime += ab.duration;
+      },
+      error: (e) => {
+        console.warn('AudioDecoder error:', e);
+        if (isPlaying) {
+          setTimeout(() => { if (isPlaying) initDecoder(); }, 300);
+        }
+      }
+    });
+
+    try {
+      opusDecoder.configure({
+        codec: 'opus',
+        sampleRate: 48000,
+        numberOfChannels: 1,
+      });
+      return true;
+    } catch(e) {
+      console.warn('Decoder config error:', e);
+      return false;
+    }
+  }
+
+  // ---------- WebSocket ----------
+  function buildSocketUrl() {
+    let base = wsUrlInput.value.trim();
+    if (!base) return null;
+    // ensure trailing slash for param
+    if (!base.endsWith('/') && !base.includes('?')) base += '/';
+    const token = tokenInput.value.trim();
+    const hasQuery = base.includes('?');
+    if (token) {
+      return base + (hasQuery ? '&' : '?') + 'token=' + encodeURIComponent(token);
+    }
+    return base;
+  }
+
+  function connectWebSocket() {
+    if (ws) {
+      try { ws.close(); } catch(_) {}
+      ws = null;
+    }
+    const url = buildSocketUrl();
+    if (!url) {
+      setStatus('disconnected', 'Invalid URL');
+      updateConnInfo('missing URL');
+      return false;
+    }
+    updateConnInfo(`connecting to ${url.replace(/token=[^&]*/, 'token=***')}`);
+    setStatus('connecting', 'Connecting…');
+
+    ws = new WebSocket(url);
+    ws.binaryType = 'arraybuffer';
+
+    ws.onopen = () => {
+      console.log('✅ WS connected');
+      setStatus('connected', 'Connected');
+      updateConnInfo('active');
+      // reset timing
+      nextPlayTime = 0;
+      timestamp = 0;
+    };
+
+    ws.onmessage = (event) => {
+      if (!isPlaying) return;
+
+      if (typeof event.data === 'string') {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'talker_start') {
+            nextPlayTime = 0;
+          } else if (msg.type === 'talker_stop') {
+            nextPlayTime = 0;
+          } else if (msg.type === 'client_count') {
+            updateListenerCount(msg.count);
+          }
+        } catch(_) {}
+        return;
+      }
+
+      if (!opusDecoder || opusDecoder.state !== 'configured') return;
+      if (!event.data || event.data.byteLength < 12) return;
+
+      const opusData = new Uint8Array(event.data, 12);
+      const chunk = new EncodedAudioChunk({
+        type: 'key',
+        timestamp: timestamp,
+        data: opusData,
+      });
+      timestamp += 0.02 * 1e6; // 20ms
+
+      try {
+        opusDecoder.decode(chunk);
+      } catch(_) {}
+    };
+
+    ws.onerror = (e) => {
+      console.warn('WS error', e);
+      setStatus('disconnected', 'Error');
+      updateConnInfo('connection error');
+    };
+
+    ws.onclose = (e) => {
+      console.log('WS closed', e.code, e.reason);
+      if (!isPlaying) {
+        setStatus('disconnected', 'Stopped');
+        updateConnInfo('stopped');
+        return;
+      }
+      if (e.code === 4001) {
+        setStatus('disconnected', 'Auth failed');
+        updateConnInfo('authentication failed');
+        if (isPlaying) stopPlayer();
+        return;
+      }
+      setStatus('reconnecting', 'Reconnecting…');
+      updateConnInfo('reconnecting…');
+      // auto reconnect
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      reconnectTimer = setTimeout(() => {
+        if (isPlaying) {
+          initDecoder();
+          connectWebSocket();
+        }
+      }, 2000 + Math.random() * 1000);
+    };
+
+    return true;
+  }
+
+  // ---------- player control ----------
+  async function startPlayer() {
+    if (isPlaying) return;
+
+    // check URL
+    const url = buildSocketUrl();
+    if (!url) {
+      alert('Please enter a valid WebSocket URL');
+      return;
+    }
+
+    // check decoder support
+    if (!('AudioDecoder' in window)) {
+      alert('Your browser does not support WebCodecs (AudioDecoder).');
+      return;
+    }
+
+    // audio context
+    try {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 48000,
+        latencyHint: 'playback'
+      });
+      if (audioCtx.state === 'suspended') {
+        await audioCtx.resume();
+      }
+    } catch(e) {
+      alert('Could not create AudioContext: ' + e.message);
+      return;
+    }
+
+    gainNode = audioCtx.createGain();
+    gainNode.gain.value = 1.0;
+    gainNode.connect(audioCtx.destination);
+
+    // peak meter
+    const peakContainer = document.getElementById('peak-meter');
+    if (typeof webAudioPeakMeter !== 'undefined' && peakContainer) {
+      try {
+        const PeakMeterClass = webAudioPeakMeter.WebAudioPeakMeter;
+        if (PeakMeterClass) {
+          peakMeter = new PeakMeterClass(gainNode, peakContainer, {
+            backgroundColor: 'rgba(2, 50, 98, 0.77)',
+            borderSize: 2,
+            tickColor: '#ddd',
+            labelColor: '#ddd',
+            gradient: ['red 1%', '#ff0 16%', 'lime 45%', '#080 100%'],
+            dbRangeMin: -42,
+            dbRangeMax: 0,
+            dbTickSize: 6,
+            vertical: false,
+            fontSize: 9,
+            maskTransition: '0.05s',
+            audioMeterStandard: 'peak-sample',
+            peakHoldDuration: 1200
+          });
+        }
+      } catch(_) {}
+    }
+
+    $('#peak-meter').slideDown();
+
+    isPlaying = true;
+    nextPlayTime = 0;
+    timestamp = 0;
+    currentListenerCount = 0;
+    updateListenerCount(0);
+    toggleBtn.textContent = 'Stop';
+    toggleBtn.className = 'btn btn-danger';
+
+    // init decoder & connect
+    if (!initDecoder()) {
+      stopPlayer();
+      alert('Failed to initialize Opus decoder.');
+      return;
+    }
+
+    connectWebSocket();
+  }
+
+  function stopPlayer() {
+    isPlaying = false;
+
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+
+    if (ws) {
+      try { ws.close(); } catch(_) {}
+      ws = null;
+    }
+
+    if (opusDecoder && opusDecoder.state !== 'closed') {
+      try { opusDecoder.close(); } catch(_) {}
+      opusDecoder = null;
+    }
+
+    if (gainNode) {
+      try { gainNode.disconnect(); } catch(_) {}
+      gainNode = null;
+    }
+
+    if (audioCtx) {
+      try { audioCtx.close(); } catch(_) {}
+      audioCtx = null;
+    }
+
+    nextPlayTime = 0;
+    timestamp = 0;
+    currentListenerCount = 0;
+    updateListenerCount(0);
+
+    setStatus('disconnected', 'Stopped');
+    updateConnInfo('idle');
+
+    $('#peak-meter').slideUp(() => {
+      if (peakMeter) {
+        try { peakMeter.cleanup(); } catch(_) {}
+        peakMeter = null;
+      }
+    });
+
+    toggleBtn.textContent = 'Start';
+    toggleBtn.className = 'btn btn-success';
+  }
+
+  function resetAll() {
+    const wasPlaying = isPlaying;
+    if (wasPlaying) stopPlayer();
+    // clear fields
+    wsUrlInput.value = 'wss://example.net:8080/';
+    tokenInput.value = '';
+    setStatus('disconnected', 'Idle');
+    updateConnInfo('reset');
+    updateListenerCount(0);
+    if (!wasPlaying) {
+      toggleBtn.textContent = 'Start';
+      toggleBtn.className = 'btn btn-success';
+    }
+    $('#peak-meter').slideUp();
+  }
+
+  // ---------- event binding ----------
+  toggleBtn.addEventListener('click', function() {
+    if (isPlaying) {
+      stopPlayer();
+    } else {
+      startPlayer();
+    }
+  });
+
+  resetBtn.addEventListener('click', resetAll);
+
+  // initial status
+  setStatus('disconnected', 'Idle');
+  updateConnInfo('ready');
+  updateListenerCount(0);
+
+  // if token is present in URL (for demo), prefill
+  const urlParams = new URLSearchParams(window.location.search);
+  const tokenParam = urlParams.get('token');
+  if (tokenParam) tokenInput.value = tokenParam;
+
+})();
+</script>
+</body>
+</html>

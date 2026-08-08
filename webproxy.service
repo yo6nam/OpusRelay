@@ -1,0 +1,30 @@
+[Unit]
+Description=OpusRelay WebSocket Proxy (Go/Opus)
+After=network-online.target
+
+[Service]
+Type=simple
+User=webproxy
+Group=webproxy
+ExecStart=/path/to/opus-relay \
+    -wsport 8080 \
+    -pcmport 1235 \
+    -cert /path/to/cert.pem \
+    -key /path/to/key.pem \
+    -bitrate 16000 \
+    -maxclients 500 \
+    -log /var/log/opus-relay.log
+Restart=always
+RestartSec=10
+LimitNOFILE=65536
+
+# --- Hardening ---
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/var/log/opus-relay
+
+[Install]
+WantedBy=multi-user.target

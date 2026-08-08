@@ -1,0 +1,12 @@
+/webproxy
+*.exe
+*.test
+*.secret
+jwt.secret
+config.json
+config.local.json
+*.pem
+*.key
+*.log
+.DS_Store
+*.swp
