@@ -5,6 +5,13 @@ that takes raw PCM audio over UDP, encodes it to Opus, and broadcasts it to
 browsers over WebSocket — with JWT authentication and a native WebCodecs
 client.
 
+> **Initial context:** This project was originally developed to enable real-time
+> monitoring of radio traffic on a reflector running SVXLink, allowing users
+> to listen to radio communications directly in their browser without the
+> need for dedicated radio equipment. Over time, it was extended to support
+> other generic audio sources, making it a versatile tool for live audio
+> streaming.
+
 **[Live demo](https://yo6nam.github.io/OpusRelay/example.html)**
 
 ## Why zero external dependencies?
