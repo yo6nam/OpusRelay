@@ -1,95 +1,55 @@
-name: Build OpusRelay
-
-on:
-  push:
-    branches: [ "main", "master" ]
-  pull_request:
-    branches: [ "main", "master" ]
-  workflow_dispatch:
-
+# Varianta care compilează ARM într-un container separat
 jobs:
-  build:
-    name: Build for ${{ matrix.os }} ${{ matrix.arch }}
+  build-linux:
+    name: Build Linux
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        include:
-          - os: linux
-            arch: amd64
-            goos: linux
-            goarch: amd64
-            binary_name: webproxy-linux-amd64
-            libopus_pkg: libopus-dev
-          - os: linux
-            arch: armhf
-            goos: linux
-            goarch: arm
-            goarm: 7
-            binary_name: webproxy-linux-armhf
-            libopus_pkg: libopus-dev:armhf
-          - os: windows
-            arch: amd64
-            goos: windows
-            goarch: amd64
-            binary_name: webproxy-windows-amd64.exe
-            libopus_pkg: libopus-dev
-
+        arch: [amd64, armhf]
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Go
-      uses: actions/setup-go@v5
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-        cache: false
-
-    - name: Install libopus (Linux native)
-      if: matrix.os == 'linux'
+    
+    - name: Build for ${{ matrix.arch }}
       run: |
-        sudo apt-get update
-        sudo apt-get install -y ${{ matrix.libopus_pkg }} gcc
-
-    - name: Install ARM cross-compiler (for armhf)
-      if: matrix.os == 'linux' && matrix.arch == 'armhf'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-arm-linux-gnueabihf libc6-dev-armhf-cross
-
-    - name: Install Windows cross-compiler
-      if: matrix.os == 'windows'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-mingw-w64-x86-64
-
-    - name: Set build environment (Linux armhf)
-      if: matrix.os == 'linux' && matrix.arch == 'armhf'
-      run: |
-        echo "CC=arm-linux-gnueabihf-gcc" >> $GITHUB_ENV
-        echo "CXX=arm-linux-gnueabihf-g++" >> $GITHUB_ENV
-        echo "PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig" >> $GITHUB_ENV
-
-    - name: Set build environment (Windows)
-      if: matrix.os == 'windows'
-      run: |
-        echo "CC=x86_64-w64-mingw32-gcc" >> $GITHUB_ENV
-        echo "CXX=x86_64-w64-mingw32-g++" >> $GITHUB_ENV
-
-    - name: Build webproxy
-      env:
-        GOOS: ${{ matrix.goos }}
-        GOARCH: ${{ matrix.goarch }}
-        GOARM: ${{ matrix.goarm }}
-        CGO_ENABLED: 1
-      run: |
-        if [ "${{ matrix.os }}" = "linux" ]; then
-          export PKG_CONFIG_PATH=/usr/lib/${{ matrix.goarch }}-linux-gnu/pkgconfig
+        if [ "${{ matrix.arch }}" = "amd64" ]; then
+          sudo apt-get update && sudo apt-get install -y libopus-dev gcc
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=1 go build -ldflags="-s -w" -o webproxy-linux-amd64 webproxy.go
+        else
+          # Pentru ARM, folosim un container cu arhitectura corectă
+          docker run --rm -v $PWD:/build -w /build \
+            arm32v7/ubuntu:22.04 \
+            bash -c "
+              apt-get update && apt-get install -y golang-go libopus-dev gcc &&
+              GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 \
+              go build -ldflags='-s -w' -o webproxy-linux-armhf webproxy.go
+            "
         fi
-        go build -ldflags="-s -w" -o ${{ matrix.binary_name }} webproxy.go
-
-    - name: Upload binary
-      uses: actions/upload-artifact@v4
+    
+    - uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.binary_name }}
-        path: ${{ matrix.binary_name }}
-        if-no-files-found: error
+        name: webproxy-linux-${{ matrix.arch }}
+        path: webproxy-linux-${{ matrix.arch }}
+
+  build-windows:
+    name: Build Windows
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+    
+    - name: Build for Windows
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-mingw-w64-x86-64 libopus-dev
+        CC=x86_64-w64-mingw32-gcc GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
+        go build -ldflags="-s -w" -o webproxy-windows-amd64.exe webproxy.go
+    
+    - uses: actions/upload-artifact@v4
+      with:
+        name: webproxy-windows-amd64
+        path: webproxy-windows-amd64.exe
