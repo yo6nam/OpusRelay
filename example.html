@@ -106,6 +106,11 @@
       justify-content: center;
       width: 100%;
     }
+    .status-badge.latency {
+      margin-top: 2px;
+      font-size: 12px;
+      color: #6a7fa0;
+    }
     .dot {
       display: inline-block;
       width: 10px;
@@ -170,6 +175,10 @@
     <span id="listenerInfo" style="margin-left:auto;font-weight:400;"></span>
   </div>
 
+  <div class="status-badge latency">
+    <span id="latencyDisplay">⏱️ —</span>
+  </div>
+
   <div id="peak-meter"></div>
   <div class="info-text">
     <span id="connectionInfo">not connected</span>
@@ -181,7 +190,6 @@
 
 <script>
 (function() {
-  // DOM refs
   const wsUrlInput = document.getElementById('wsUrl');
   const tokenInput = document.getElementById('tokenInput');
   const toggleBtn = document.getElementById('togglePlayer');
@@ -190,8 +198,8 @@
   const statusLabel = document.getElementById('statusLabel');
   const listenerInfo = document.getElementById('listenerInfo');
   const connInfo = document.getElementById('connectionInfo');
+  const latencyDisplay = document.getElementById('latencyDisplay');
 
-  // state
   let isPlaying = false;
   let ws = null;
   let audioCtx = null;
@@ -205,7 +213,6 @@
   let channels = 1;
   const channelsSelect = document.getElementById('channelsSelect');
 
-  // ---------- helpers ----------
   function setStatus(state, msg) {
     statusDot.className = 'dot';
     if (state === 'connected') {
@@ -230,9 +237,7 @@
     } else {
       listenerInfo.textContent = '';
     }
-    // also update button text
     if (isPlaying) {
-      const base = 'Stop';
       toggleBtn.textContent = count ? `Stop (${count})` : 'Stop';
     }
   }
@@ -241,7 +246,18 @@
     connInfo.textContent = text || '—';
   }
 
-  // ---------- audio / decoder ----------
+  function updateLatency(rttMs) {
+    if (latencyDisplay) {
+      latencyDisplay.textContent = `⏱️ Latency: ${rttMs.toFixed(1)} ms`;
+    }
+  }
+
+  function resetLatency() {
+    if (latencyDisplay) {
+      latencyDisplay.textContent = '⏱️ —';
+    }
+  }
+
   function initDecoder() {
     if (opusDecoder && opusDecoder.state !== 'closed') {
       try { opusDecoder.close(); } catch(_) {}
@@ -259,9 +275,6 @@
         }
         const nFrames = audioData.numberOfFrames;
         const ab = audioCtx.createBuffer(channels, nFrames, 48000);
-        // Copy every channel plane — copying only planeIndex 0 silently
-        // drops every channel past the first (e.g. the right channel
-        // in stereo).
         const buf = new Float32Array(nFrames);
         for (let ch = 0; ch < channels; ch++) {
           audioData.copyTo(buf, { planeIndex: ch, format: 'f32-planar' });
@@ -299,11 +312,9 @@
     }
   }
 
-  // ---------- WebSocket ----------
   function buildSocketUrl() {
     let base = wsUrlInput.value.trim();
     if (!base) return null;
-    // ensure trailing slash for param
     if (!base.endsWith('/') && !base.includes('?')) base += '/';
     const token = tokenInput.value.trim();
     const hasQuery = base.includes('?');
@@ -334,7 +345,6 @@
       console.log('✅ WS connected');
       setStatus('connected', 'Connected');
       updateConnInfo('active');
-      // reset timing
       nextPlayTime = 0;
       timestamp = 0;
     };
@@ -351,6 +361,8 @@
             nextPlayTime = 0;
           } else if (msg.type === 'client_count') {
             updateListenerCount(msg.count);
+          } else if (msg.type === 'latency') {
+            updateLatency(msg.rtt_ms);
           }
         } catch(_) {}
         return;
@@ -365,7 +377,7 @@
         timestamp: timestamp,
         data: opusData,
       });
-      timestamp += 0.02 * 1e6; // 20ms
+      timestamp += 0.02 * 1e6;
 
       try {
         opusDecoder.decode(chunk);
@@ -393,7 +405,6 @@
       }
       setStatus('reconnecting', 'Reconnecting…');
       updateConnInfo('reconnecting…');
-      // auto reconnect
       if (reconnectTimer) clearTimeout(reconnectTimer);
       reconnectTimer = setTimeout(() => {
         if (isPlaying) {
@@ -406,18 +417,15 @@
     return true;
   }
 
-  // ---------- player control ----------
   async function startPlayer() {
     if (isPlaying) return;
 
-    // check URL
     const url = buildSocketUrl();
     if (!url) {
       alert('Please enter a valid WebSocket URL');
       return;
     }
 
-    // check decoder support
     if (!('AudioDecoder' in window)) {
       alert('Your browser does not support WebCodecs (AudioDecoder).');
       return;
@@ -426,7 +434,6 @@
     channels = parseInt(channelsSelect.value, 10) || 1;
     channelsSelect.disabled = true;
 
-    // audio context
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: 48000,
@@ -444,7 +451,6 @@
     gainNode.gain.value = 1.0;
     gainNode.connect(audioCtx.destination);
 
-    // peak meter
     const peakContainer = document.getElementById('peak-meter');
     if (typeof webAudioPeakMeter !== 'undefined' && peakContainer) {
       try {
@@ -476,10 +482,10 @@
     timestamp = 0;
     currentListenerCount = 0;
     updateListenerCount(0);
+    resetLatency();
     toggleBtn.textContent = 'Stop';
     toggleBtn.className = 'btn btn-danger';
 
-    // init decoder & connect
     if (!initDecoder()) {
       stopPlayer();
       alert('Failed to initialize Opus decoder.');
@@ -521,6 +527,7 @@
     timestamp = 0;
     currentListenerCount = 0;
     updateListenerCount(0);
+    resetLatency();
 
     setStatus('disconnected', 'Stopped');
     updateConnInfo('idle');
@@ -540,11 +547,11 @@
   function resetAll() {
     const wasPlaying = isPlaying;
     if (wasPlaying) stopPlayer();
-    // clear fields
     wsUrlInput.value = 'wss://backup.rolink.network:8080/';
     tokenInput.value = '';
     channelsSelect.value = '1';
     channelsSelect.disabled = false;
+    resetLatency();
     setStatus('disconnected', 'Idle');
     updateConnInfo('reset');
     updateListenerCount(0);
@@ -555,7 +562,6 @@
     $('#peak-meter').slideUp();
   }
 
-  // ---------- event binding ----------
   toggleBtn.addEventListener('click', function() {
     if (isPlaying) {
       stopPlayer();
@@ -566,12 +572,11 @@
 
   resetBtn.addEventListener('click', resetAll);
 
-  // initial status
   setStatus('disconnected', 'Idle');
   updateConnInfo('ready');
   updateListenerCount(0);
+  resetLatency();
 
-  // if token is present in URL (for demo), prefill
   const urlParams = new URLSearchParams(window.location.search);
   const tokenParam = urlParams.get('token');
   if (tokenParam) tokenInput.value = tokenParam;
