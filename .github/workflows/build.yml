@@ -38,7 +38,6 @@ jobs:
 
   build-linux-armhf:
     name: Build Linux armhf
-    # ubuntu-20.04 include glibc 2.31, 100% compatibil cu Armbian Bullseye (Debian 11)
     runs-on: ubuntu-20.04
     steps:
     - uses: actions/checkout@v4
@@ -72,7 +71,7 @@ jobs:
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    - name: Install dependencies and Opus from Xiph Official Mirror
+    - name: Install dependencies and build static Opus for Windows
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc-mingw-w64-x86-64 make
@@ -80,7 +79,7 @@ jobs:
         wget https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
         tar -xzf opus-1.5.2.tar.gz
         cd opus-1.5.2
-        ./configure --host=x86_64-w64-mingw32 --prefix=/usr/x86_64-w64-mingw32
+        ./configure --host=x86_64-w64-mingw32 --prefix=/usr/x86_64-w64-mingw32 --enable-static --disable-shared
         make -j$(nproc)
         sudo make install
     - name: Build
@@ -89,7 +88,7 @@ jobs:
         export CXX=x86_64-w64-mingw32-g++
         export PKG_CONFIG_PATH=/usr/x86_64-w64-mingw32/lib/pkgconfig
         GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
-        go build -ldflags="-s -w" -o webproxy-windows-amd64.exe webproxy.go
+        go build -ldflags="-s -w -extldflags '-static'" -o webproxy-windows-amd64.exe webproxy.go
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-windows-amd64
