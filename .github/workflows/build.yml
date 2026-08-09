@@ -36,35 +36,29 @@ jobs:
         name: webproxy-linux-amd64
         path: webproxy-linux-amd64
 
-build-linux-armhf:
+  build-linux-armhf:
     name: Build Linux armhf
-    runs-on: ubuntu-latest
+    # ubuntu-20.04 include glibc 2.31, 100% compatibil cu Armbian Bullseye (Debian 11)
+    runs-on: ubuntu-20.04
     steps:
     - uses: actions/checkout@v4
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    - name: Configure Ubuntu Ports for armhf & Install dependencies
+    - name: Install dependencies
       run: |
-        if [ -f /etc/apt/sources.list.d/ubuntu.sources ]; then
-          sudo sed -i 's/^Types: deb/Architectures: amd64 i386\nTypes: deb/' /etc/apt/sources.list.d/ubuntu.sources
-        fi
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/armhf.list
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
-        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
-
         sudo dpkg --add-architecture armhf
         sudo apt-get update
         sudo apt-get install -y \
           gcc-arm-linux-gnueabihf \
           libc6-dev-armhf-cross \
           libopus-dev:armhf
-    - name: Build Static Binary
+    - name: Build
       run: |
         export CC=arm-linux-gnueabihf-gcc
         export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
         GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 \
-        go build -ldflags="-s -w -extldflags '-static'" -o webproxy-linux-armhf webproxy.go
+        go build -ldflags="-s -w" -o webproxy-linux-armhf webproxy.go
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-linux-armhf
