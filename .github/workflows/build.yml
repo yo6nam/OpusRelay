@@ -36,7 +36,7 @@ jobs:
         name: webproxy-linux-amd64
         path: webproxy-linux-amd64
 
-  build-linux-armhf:
+build-linux-armhf:
     name: Build Linux armhf
     runs-on: ubuntu-latest
     steps:
@@ -59,12 +59,12 @@ jobs:
           gcc-arm-linux-gnueabihf \
           libc6-dev-armhf-cross \
           libopus-dev:armhf
-    - name: Build
+    - name: Build Static Binary
       run: |
         export CC=arm-linux-gnueabihf-gcc
         export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
         GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 \
-        go build -ldflags="-s -w" -o webproxy-linux-armhf webproxy.go
+        go build -ldflags="-s -w -extldflags '-static'" -o webproxy-linux-armhf webproxy.go
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-linux-armhf
