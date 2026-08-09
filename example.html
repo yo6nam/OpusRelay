@@ -2,6 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>WebProxy — Opus client</title>
   <style>
     * { box-sizing: border-box; margin: 0; }
@@ -13,13 +14,13 @@
       align-items: center;
       justify-content: center;
       min-height: 100vh;
-      padding: 20px;
+      padding: 16px;
     }
     .panel {
       background: #111a2e;
       border: 1px solid #1f2b47;
       border-radius: 16px;
-      padding: 28px 30px;
+      padding: 24px 20px;
       width: 100%;
       max-width: 440px;
       box-shadow: 0 12px 30px rgba(0,0,0,0.6);
@@ -27,12 +28,13 @@
     h3 {
       font-weight: 500;
       letter-spacing: 0.3px;
-      margin-bottom: 18px;
+      margin-bottom: 16px;
       text-align: center;
       color: #c8d6f0;
+      font-size: 1.25rem;
     }
     .field {
-      margin-bottom: 14px;
+      margin-bottom: 12px;
     }
     .field label {
       display: block;
@@ -60,23 +62,39 @@
     .field input::placeholder {
       color: #47577a;
     }
+    .field select {
+      width: 100%;
+      padding: 10px 14px;
+      background: #0d162b;
+      border: 1px solid #253252;
+      border-radius: 10px;
+      color: #f0f4ff;
+      font-size: 14px;
+      outline: none;
+      appearance: auto;
+    }
+    .field select:focus {
+      border-color: #4a7cff;
+      box-shadow: 0 0 0 3px rgba(74, 124, 255, 0.2);
+    }
     .row {
       display: flex;
-      gap: 12px;
-      margin-top: 18px;
+      gap: 10px;
+      margin-top: 16px;
       align-items: center;
       justify-content: center;
     }
     .btn {
       border: none;
       border-radius: 40px;
-      padding: 11px 24px;
+      padding: 11px 20px;
       font-weight: 600;
       font-size: 14px;
       cursor: pointer;
       transition: 0.2s;
       flex: 1;
       letter-spacing: 0.2px;
+      min-height: 48px;
     }
     .btn-success { background: #16a34a; color: white; }
     .btn-success:hover { background: #15803d; }
@@ -89,7 +107,7 @@
     }
     .btn-outline:hover { background: #1f2942; }
     #peak-meter {
-      margin-top: 18px;
+      margin-top: 16px;
       height: 44px;
       display: none;
       background: #0a1122;
@@ -102,9 +120,10 @@
       gap: 8px;
       font-size: 13px;
       color: #8ca3c9;
-      margin-top: 6px;
+      margin-top: 8px;
       justify-content: center;
       width: 100%;
+      flex-wrap: wrap;
     }
     .status-badge.latency {
       margin-top: 2px;
@@ -118,6 +137,7 @@
       border-radius: 50%;
       background: #47577a;
       transition: 0.25s;
+      flex-shrink: 0;
     }
     .dot.connected { background: #4ade80; box-shadow: 0 0 8px #4ade8066; }
     .dot.connecting { background: #facc15; box-shadow: 0 0 8px #facc1566; animation: pulse 1s infinite; }
@@ -134,10 +154,86 @@
       margin-top: 12px;
       border-top: 1px solid #1f2942;
       padding-top: 14px;
+      word-break: break-all;
     }
     .listener-count {
       font-weight: 500;
       color: #b7cdff;
+    }
+
+    @media (max-width: 480px) {
+      body {
+        padding: 10px;
+      }
+      .panel {
+        padding: 18px 14px;
+        border-radius: 12px;
+      }
+      h3 {
+        font-size: 1.1rem;
+        margin-bottom: 14px;
+      }
+      .field {
+        margin-bottom: 10px;
+      }
+      .field input, .field select {
+        padding: 9px 12px;
+        font-size: 13px;
+      }
+      .field label {
+        font-size: 12px;
+      }
+      .row {
+        gap: 8px;
+        flex-wrap: wrap;
+      }
+      .btn {
+        padding: 10px 14px;
+        font-size: 13px;
+        min-height: 44px;
+        flex: 1 1 40%;
+      }
+      #peak-meter {
+        height: 36px;
+        margin-top: 14px;
+      }
+      .status-badge {
+        font-size: 12px;
+        gap: 6px;
+        margin-top: 6px;
+      }
+      .status-badge.latency {
+        font-size: 11px;
+      }
+      .info-text {
+        font-size: 11px;
+        padding-top: 12px;
+        margin-top: 10px;
+      }
+      .dot {
+        width: 8px;
+        height: 8px;
+      }
+    }
+
+    @media (max-width: 380px) {
+      .panel {
+        padding: 14px 10px;
+      }
+      .btn {
+        font-size: 12px;
+        padding: 8px 10px;
+        min-height: 40px;
+        flex: 1 1 100%;
+      }
+      .row {
+        flex-direction: column;
+        gap: 6px;
+      }
+      .field input, .field select {
+        font-size: 12px;
+        padding: 8px 10px;
+      }
     }
   </style>
 </head>
@@ -158,7 +254,7 @@
 
   <div class="field">
     <label for="channelsSelect">Channels</label>
-    <select id="channelsSelect" style="width:100%;padding:10px 14px;background:#0d162b;border:1px solid #253252;border-radius:10px;color:#f0f4ff;font-size:14px;outline:none;">
+    <select id="channelsSelect">
       <option value="1" selected>Mono (1)</option>
       <option value="2">Stereo (2)</option>
     </select>
