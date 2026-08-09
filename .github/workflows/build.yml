@@ -3,6 +3,8 @@ name: Build OpusRelay
 on:
   push:
     branches: [ main, master ]
+    tags:
+      - 'v*'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -76,7 +78,6 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y gcc-mingw-w64-x86-64 make
         cd /tmp
-        # Descarcare de pe oglinda oficiala Xiph/Downloads unde tarball-urile sunt permanente
         wget https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
         tar -xzf opus-1.5.2.tar.gz
         cd opus-1.5.2
@@ -95,7 +96,7 @@ jobs:
         name: webproxy-windows-amd64
         path: webproxy-windows-amd64.exe
 
-release:
+  release:
     name: Create GitHub Release
     needs: [build-linux-amd64, build-linux-armhf, build-windows]
     if: startsWith(github.ref, 'refs/tags/')
