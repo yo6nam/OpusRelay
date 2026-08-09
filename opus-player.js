@@ -8,7 +8,9 @@ const AUTH_TOKEN = (typeof window.AUDIO_TOKEN !== 'undefined' && window.AUDIO_TO
 
 const WS_URL = SOCKET_URL + (SOCKET_URL.includes('?') ? '&' : '?') + 'token=' + encodeURIComponent(AUTH_TOKEN);
 const SAMPLE_RATE    = 48000;
-const CHANNELS       = 1;
+const CHANNELS       = (typeof window.AUDIO_CHANNELS !== 'undefined' && window.AUDIO_CHANNELS)
+    ? window.AUDIO_CHANNELS
+    : 1;
 const FRAME_DURATION = 0.02;
 
 let ws           = null;
@@ -158,12 +160,16 @@ function initDecoder() {
             }
 
             const nFrames = audioData.numberOfFrames;
-            const buf     = new Float32Array(nFrames);
-            audioData.copyTo(buf, { planeIndex: 0, format: 'f32' });
-            audioData.close();
-
             const ab = audioCtx.createBuffer(CHANNELS, nFrames, SAMPLE_RATE);
-            ab.copyToChannel(buf, 0);
+            // Copy every channel plane — copying only planeIndex 0 silently
+            // drops every channel past the first (e.g. the right channel
+            // in stereo).
+            const buf = new Float32Array(nFrames);
+            for (let ch = 0; ch < CHANNELS; ch++) {
+                audioData.copyTo(buf, { planeIndex: ch, format: 'f32-planar' });
+                ab.copyToChannel(buf, ch);
+            }
+            audioData.close();
 
             const now = audioCtx.currentTime;
             if (nextPlayTime < now) nextPlayTime = now + 0.10;

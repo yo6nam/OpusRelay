@@ -10,19 +10,26 @@ package main
 
 typedef struct { OpusEncoder *enc; } GoOpusEncoder;
 
-GoOpusEncoder* opus_encoder_create_wrapper(int sampleRate, int channels, int bitrate, int *err) {
+GoOpusEncoder* opus_encoder_create_wrapper(int sampleRate, int channels, int bitrate, int musicMode, int *err) {
     GoOpusEncoder *e = (GoOpusEncoder*)malloc(sizeof(GoOpusEncoder));
-    e->enc = opus_encoder_create(sampleRate, channels, OPUS_APPLICATION_VOIP, err);
+    int application = musicMode ? OPUS_APPLICATION_AUDIO : OPUS_APPLICATION_VOIP;
+    e->enc = opus_encoder_create(sampleRate, channels, application, err);
     if (*err != OPUS_OK || e->enc == NULL) { free(e); return NULL; }
 
     opus_encoder_ctl(e->enc, OPUS_SET_BITRATE(bitrate));
-    opus_encoder_ctl(e->enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
-    opus_encoder_ctl(e->enc, OPUS_SET_MAX_BANDWIDTH(OPUS_BANDWIDTH_WIDEBAND));
+    if (musicMode) {
+        opus_encoder_ctl(e->enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC));
+        opus_encoder_ctl(e->enc, OPUS_SET_MAX_BANDWIDTH(OPUS_BANDWIDTH_FULLBAND));
+        opus_encoder_ctl(e->enc, OPUS_SET_COMPLEXITY(10));
+    } else {
+        opus_encoder_ctl(e->enc, OPUS_SET_SIGNAL(OPUS_SIGNAL_VOICE));
+        opus_encoder_ctl(e->enc, OPUS_SET_MAX_BANDWIDTH(OPUS_BANDWIDTH_WIDEBAND));
+        opus_encoder_ctl(e->enc, OPUS_SET_COMPLEXITY(7));
+    }
     opus_encoder_ctl(e->enc, OPUS_SET_VBR(1));
     opus_encoder_ctl(e->enc, OPUS_SET_VBR_CONSTRAINT(1));
     opus_encoder_ctl(e->enc, OPUS_SET_INBAND_FEC(1));
     opus_encoder_ctl(e->enc, OPUS_SET_PACKET_LOSS_PERC(5));
-    opus_encoder_ctl(e->enc, OPUS_SET_COMPLEXITY(7));
     opus_encoder_ctl(e->enc, OPUS_SET_LSB_DEPTH(16));
 
     return e;
@@ -76,6 +83,7 @@ type Config struct {
 	OpusBitrate        int    `json:"opus_bitrate"`
 	SampleRate         int    `json:"sample_rate"`
 	Channels           int    `json:"channels"`
+	Mode               string `json:"mode"`
 	FrameMS            int    `json:"frame_ms"`
 	TestTone           bool   `json:"test_tone"`
 	DebugJitter        bool   `json:"debug_jitter"`
@@ -128,6 +136,7 @@ func loadConfig(configPath string) (*Config, error) {
 		OpusBitrate:        16000,
 		SampleRate:         48000,
 		Channels:           1,
+		Mode:               "speech",
 		FrameMS:            20,
 		TestTone:           false,
 		DebugJitter:        false,
@@ -165,6 +174,7 @@ func saveConfigTemplate(path string) error {
 		OpusBitrate:        16000,
 		SampleRate:         48000,
 		Channels:           1,
+		Mode:               "speech",
 		FrameMS:            20,
 		TestTone:           false,
 		DebugJitter:        false,
@@ -335,9 +345,6 @@ func upgradeWS(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
 }
 
 func (c *wsConn) writeLoop() {
-	// Sends a ping well under the readLoop idle timeout so listen-only
-	// clients (they never send data on their own) get a pong back and
-	// aren't dropped as idle.
 	ticker := time.NewTicker(30 * time.Second)
 	defer ticker.Stop()
 
@@ -507,23 +514,27 @@ func (c *wsConn) close() {
 	}
 }
 
-func newOpusEncoder(sampleRate, channels, bitrate int) (*opusEncoder, error) {
+func newOpusEncoder(sampleRate, channels, bitrate int, musicMode bool) (*opusEncoder, error) {
 	var cerr C.int
-	ptr := C.opus_encoder_create_wrapper(C.int(sampleRate), C.int(channels), C.int(bitrate), &cerr)
+	musicFlag := 0
+	if musicMode {
+		musicFlag = 1
+	}
+	ptr := C.opus_encoder_create_wrapper(C.int(sampleRate), C.int(channels), C.int(bitrate), C.int(musicFlag), &cerr)
 	if ptr == nil || cerr != C.OPUS_OK {
 		return nil, fmt.Errorf("opus_encoder_create failed: %d", int(cerr))
 	}
 	return &opusEncoder{ptr: ptr}, nil
 }
 
-func (e *opusEncoder) Encode(pcm []int16, out []byte) (int, error) {
+func (e *opusEncoder) Encode(pcm []int16, frameSamples int, out []byte) (int, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	n := C.opus_encode_wrapper(
 		e.ptr,
 		(*C.opus_int16)(unsafe.Pointer(&pcm[0])),
-		C.int(len(pcm)),
+		C.int(frameSamples),
 		(*C.uchar)(unsafe.Pointer(&out[0])),
 		C.int(len(out)),
 	)
@@ -539,10 +550,13 @@ func (e *opusEncoder) Destroy() {
 	C.opus_encoder_destroy_wrapper(e.ptr)
 }
 
-func generateTone(pcm []int16, sampleRate int, frequency float64, phase *float64) {
-	for i := range pcm {
+func generateTone(pcm []int16, channels int, sampleRate int, frequency float64, phase *float64) {
+	frameSamples := len(pcm) / channels
+	for i := 0; i < frameSamples; i++ {
 		val := int16(16384 * math.Sin(*phase))
-		pcm[i] = val
+		for ch := 0; ch < channels; ch++ {
+			pcm[i*channels+ch] = val
+		}
 		*phase += 2 * math.Pi * frequency / float64(sampleRate)
 		if *phase > 2*math.Pi {
 			*phase -= 2 * math.Pi
@@ -553,8 +567,7 @@ func generateTone(pcm []int16, sampleRate int, frequency float64, phase *float64
 func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 	frameSamples := cfg.SampleRate * cfg.FrameMS / 1000
 	frameBytes := frameSamples * cfg.Channels * 2
-
-	pcm16 := make([]int16, frameSamples)
+	pcm16 := make([]int16, frameSamples*cfg.Channels)
 	opusBuf := make([]byte, 4000)
 
 	var seq uint32 = 0
@@ -567,7 +580,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 		tonePhase := 0.0
 		toneFreq := 440.0
 
-		enc, err := newOpusEncoder(cfg.SampleRate, cfg.Channels, cfg.OpusBitrate)
+		enc, err := newOpusEncoder(cfg.SampleRate, cfg.Channels, cfg.OpusBitrate, cfg.Mode == "music")
 		if err != nil {
 			logger.Fatalf("Opus encoder creation failed: %v", err)
 		}
@@ -581,9 +594,9 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 
 		for range testTicker.C {
 			startLoop := time.Now()
-			generateTone(pcm16, cfg.SampleRate, toneFreq, &tonePhase)
+			generateTone(pcm16, cfg.Channels, cfg.SampleRate, toneFreq, &tonePhase)
 
-			nOut, err := enc.Encode(pcm16, opusBuf)
+			nOut, err := enc.Encode(pcm16, frameSamples, opusBuf)
 			if err != nil {
 				logger.Printf("Opus encode error: %v", err)
 				continue
@@ -627,7 +640,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 
 	logger.Printf("UDP PCM listener on %s", addr)
 
-	enc, err := newOpusEncoder(cfg.SampleRate, cfg.Channels, cfg.OpusBitrate)
+	enc, err := newOpusEncoder(cfg.SampleRate, cfg.Channels, cfg.OpusBitrate, cfg.Mode == "music")
 	if err != nil {
 		logger.Fatalf("Opus encoder: %v", err)
 	}
@@ -691,7 +704,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 				pcm16[i] = int16(binary.LittleEndian.Uint16(frame[i*2:]))
 			}
 
-			nOut, err := enc.Encode(pcm16, opusBuf)
+			nOut, err := enc.Encode(pcm16, frameSamples, opusBuf)
 			accumulator = accumulator[frameBytes:]
 			if err != nil {
 				logger.Printf("Opus encode: %v", err)
@@ -782,18 +795,12 @@ func wsHandler(cfg Config, hub *Hub, logger *log.Logger) http.HandlerFunc {
 }
 
 func main() {
-	// Pass 1: parse only -config / -gen-config / -v, since we need the config
-	// file path (if any) before we know the right defaults for the rest of
-	// the flags. A second FlagSet is used so this doesn't conflict with the
-	// full flag set registered in pass 2.
 	preFlags := flag.NewFlagSet("pre", flag.ContinueOnError)
 	preFlags.SetOutput(io.Discard)
 	var configPath string
 	var genConfig string
 	preFlags.StringVar(&configPath, "config", "", "Path to JSON config file")
 	preFlags.StringVar(&genConfig, "gen-config", "", "Generate config template file")
-	// Ignore errors here: unknown flags (-wsport etc.) are expected at this
-	// stage and will be handled by the full parse below.
 	_ = preFlags.Parse(os.Args[1:])
 
 	if genConfig != "" {
@@ -809,10 +816,6 @@ func main() {
 		log.Fatalf("Config error: %v", err)
 	}
 
-	// Pass 2: register every flag (config file values as defaults) and do
-	// the real parse. This is the only Parse() call that needs to succeed
-	// against the full argument list, so all documented flags must exist
-	// here before it runs.
 	flag.StringVar(&configPath, "config", configPath, "Path to JSON config file")
 	flag.StringVar(&genConfig, "gen-config", genConfig, "Generate config template file")
 	flag.StringVar(&cfg.WSPort, "wsport", cfg.WSPort, "WebSocket port")
@@ -822,6 +825,8 @@ func main() {
 	flag.StringVar(&cfg.TLSKey, "key", cfg.TLSKey, "TLS key")
 	flag.StringVar(&cfg.LogFile, "log", cfg.LogFile, "Log file")
 	flag.IntVar(&cfg.OpusBitrate, "bitrate", cfg.OpusBitrate, "Opus bitrate bps")
+	flag.IntVar(&cfg.Channels, "channels", cfg.Channels, "Audio channels: 1 (mono) or 2 (stereo)")
+	flag.StringVar(&cfg.Mode, "mode", cfg.Mode, "Encoder profile: speech or music")
 	flag.IntVar(&cfg.MaxClients, "maxclients", cfg.MaxClients, "Max simultaneous WS clients (0 = unlimited)")
 	flag.BoolVar(&cfg.TestTone, "testtone", cfg.TestTone, "Generate test tone instead of UDP input")
 	flag.BoolVar(&cfg.DebugJitter, "debugjitter", cfg.DebugJitter, "Log UDP gap diagnostics")
@@ -835,12 +840,24 @@ func main() {
 		os.Exit(0)
 	}
 
+	if cfg.Channels != 1 && cfg.Channels != 2 {
+		log.Fatalf("-channels must be 1 (mono) or 2 (stereo), got %d", cfg.Channels)
+	}
+	if cfg.Mode != "speech" && cfg.Mode != "music" {
+		log.Fatalf("-mode must be 'speech' or 'music', got %q", cfg.Mode)
+	}
+
 	logger := makeLogger(cfg.LogFile)
 	logger.Println("WebSocket Audio Proxy (Go/Opus)")
 	logger.Printf("Version      : %s", version)
 	logger.Printf("UDP Listen   : %s:%d", cfg.UDPIP, cfg.PCMPort)
 	logger.Printf("WebSocket    : %s", cfg.WSPort)
-	logger.Printf("Opus bitrate : %d bps | frame %dms | %dHz mono", cfg.OpusBitrate, cfg.FrameMS, cfg.SampleRate)
+	channelDesc := "mono"
+	if cfg.Channels == 2 {
+		channelDesc = "stereo"
+	}
+	logger.Printf("Opus bitrate : %d bps | frame %dms | %dHz %s | mode: %s",
+		cfg.OpusBitrate, cfg.FrameMS, cfg.SampleRate, channelDesc, cfg.Mode)
 	logger.Printf("Silence thr. : %dms", cfg.SilenceThresholdMS)
 
 	if cfg.TestTone {
@@ -851,11 +868,9 @@ func main() {
 	}
 
 	if cfg.NoAuth {
-		logger.Println("################################################################")
-		logger.Println("# WARNING: AUTHENTICATION IS DISABLED (-noauth=true)          #")
-		logger.Println("# Anyone who can reach this port can listen without a token.   #")
-		logger.Println("# For any public/production deployment, start with -noauth=false #")
-		logger.Println("################################################################")
+		logger.Println("######################################################")
+		logger.Println("# WARNING: AUTHENTICATION IS DISABLED (-noauth=true) #")
+		logger.Println("######################################################")
 	} else if _, err := getJWTSecret(); err != nil {
 		logger.Printf("WARNING: JWT secret file not found: %v", err)
 		logger.Printf("Please ensure /opt/jwt.secret exists and is readable")

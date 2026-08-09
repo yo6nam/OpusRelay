@@ -26,19 +26,29 @@ Examples of alternative sources, all using the same generic `ffmpeg`
 command to push PCM over UDP:
 
 ```bash
-# From any audio file/stream
-ffmpeg -i <source> -f s16le -ar 48000 -ac 1 udp://127.0.0.1:1235
+# From any audio file/stream (-re paces the read to real-time — without
+# it ffmpeg reads a local file as fast as disk allows and floods the UDP
+# listener far ahead of playback)
+ffmpeg -re -i <source> -f s16le -ar 48000 -ac 1 udp://127.0.0.1:1235
 
 # From an SDR (e.g. GQRX/SDR++ audio output routed through a virtual
-# device, then captured with ffmpeg)
+# device, then captured with ffmpeg) — already real-time, no -re needed
 ffmpeg -f alsa -i default -f s16le -ar 48000 -ac 1 udp://127.0.0.1:1235
 
 # Relaying an existing Icecast/Shoutcast stream
-ffmpeg -i https://example.com/stream.mp3 -f s16le -ar 48000 -ac 1 udp://127.0.0.1:1235
+ffmpeg -re -i https://example.com/stream.mp3 -f s16le -ar 48000 -ac 1 udp://127.0.0.1:1235
 
-# Microphone/line-in directly on the server
+# Microphone/line-in directly on the server — already real-time, no -re needed
 ffmpeg -f pulse -i default -f s16le -ar 48000 -ac 1 udp://127.0.0.1:1235
+
+# Stereo source, full-bandwidth music profile (start the server with
+# -channels 2 -mode music -bitrate 96000; see the flags table above)
+ffmpeg -re -i <stereo-source> -f s16le -ar 48000 -ac 2 udp://127.0.0.1:1235
 ```
+
+> 16 kbps (the default `-bitrate`) is fine for mono voice/PTT traffic, but
+> stereo or music content needs a lot more headroom — 64–128 kbps is a
+> reasonable range depending on how much you care about fidelity.
 
 Any other tool that can emit raw audio over UDP (GStreamer's `udpsink`,
 `sox`, a Python script using `socket`) works just as well. The
@@ -216,6 +226,8 @@ override the defaults below.
 | -cert        | (empty)             | TLS certificate path                   |
 | -key         | (empty)             | TLS private key path                   |
 | -bitrate     | 16000               | Opus bitrate in bps                    |
+| -channels    | 1                   | Audio channels: 1 (mono) or 2 (stereo) |
+| -mode        | speech              | Encoder profile: `speech` (narrowband-optimized, VOIP application) or `music` (full 20kHz bandwidth, higher complexity) — see below |
 | -maxclients  | 500                 | Max simultaneous WS clients (0 = unlimited) |
 | -log         | /var/log/proxy.log  | Log file path                          |
 | -testtone    | false               | Generate a 440Hz test tone instead of reading UDP |
@@ -261,6 +273,7 @@ loaded. Configure it via globals set **before** the script tag:
 <script>
   window.AUDIO_SOCKET_URL = "wss://your-host:8080/"; // defaults to wss://example.net:8080/ if unset
   window.AUDIO_TOKEN      = "eyJhbGciOi...";
+  window.AUDIO_CHANNELS   = 2; // defaults to 1 (mono) if unset — must match the server's -channels flag
 </script>
 <script src="opus-player.js"></script>
 ```
@@ -268,11 +281,12 @@ loaded. Configure it via globals set **before** the script tag:
 ### `example.html` — standalone demo/test client
 
 A self-contained page with its own UI — WebSocket URL and token as editable
-input fields, connection status indicator, listener count, reset button.
-Doesn't need a host page or any globals; just open it in a browser, paste a
-URL and a token (or leave the token empty if the server is running with
-`-noauth=true`), and hit Start. Useful both as a quick manual test tool and
-as a reference implementation.
+input fields, a Channels dropdown (Mono/Stereo — must match the server's
+`-channels` flag), connection status indicator, listener count, reset
+button. Doesn't need a host page or any globals; just open it in a
+browser, paste a URL and a token (or leave the token empty if the server
+is running with `-noauth=true`), pick the channel count, and hit Start.
+Useful both as a quick manual test tool and as a reference implementation.
 
 ### Protocol notes (apply to both clients)
 

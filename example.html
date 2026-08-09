@@ -143,12 +143,20 @@
 
   <div class="field">
     <label for="wsUrl">WebSocket URL</label>
-    <input type="text" id="wsUrl" placeholder="wss://example.net:8080/" value="">
+    <input type="text" id="wsUrl" placeholder="wss://backup.rolink.network:8080/" value="wss://backup.rolink.network:8080/">
   </div>
 
   <div class="field">
     <label for="tokenInput">Token <span style="color:#5d6f96;font-weight:400;">(optional if noauth)</span></label>
     <input type="text" id="tokenInput" placeholder="JWT token or leave empty">
+  </div>
+
+  <div class="field">
+    <label for="channelsSelect">Channels</label>
+    <select id="channelsSelect" style="width:100%;padding:10px 14px;background:#0d162b;border:1px solid #253252;border-radius:10px;color:#f0f4ff;font-size:14px;outline:none;">
+      <option value="1" selected>Mono (1)</option>
+      <option value="2">Stereo (2)</option>
+    </select>
   </div>
 
   <div class="row">
@@ -194,6 +202,8 @@
   let timestamp = 0;
   let reconnectTimer = null;
   let currentListenerCount = 0;
+  let channels = 1;
+  const channelsSelect = document.getElementById('channelsSelect');
 
   // ---------- helpers ----------
   function setStatus(state, msg) {
@@ -248,12 +258,16 @@
           return;
         }
         const nFrames = audioData.numberOfFrames;
+        const ab = audioCtx.createBuffer(channels, nFrames, 48000);
+        // Copy every channel plane — copying only planeIndex 0 silently
+        // drops every channel past the first (e.g. the right channel
+        // in stereo).
         const buf = new Float32Array(nFrames);
-        audioData.copyTo(buf, { planeIndex: 0, format: 'f32' });
+        for (let ch = 0; ch < channels; ch++) {
+          audioData.copyTo(buf, { planeIndex: ch, format: 'f32-planar' });
+          ab.copyToChannel(buf, ch);
+        }
         audioData.close();
-
-        const ab = audioCtx.createBuffer(1, nFrames, 48000);
-        ab.copyToChannel(buf, 0);
 
         const now = audioCtx.currentTime;
         if (nextPlayTime < now) nextPlayTime = now + 0.10;
@@ -276,7 +290,7 @@
       opusDecoder.configure({
         codec: 'opus',
         sampleRate: 48000,
-        numberOfChannels: 1,
+        numberOfChannels: channels,
       });
       return true;
     } catch(e) {
@@ -409,6 +423,9 @@
       return;
     }
 
+    channels = parseInt(channelsSelect.value, 10) || 1;
+    channelsSelect.disabled = true;
+
     // audio context
     try {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)({
@@ -517,14 +534,17 @@
 
     toggleBtn.textContent = 'Start';
     toggleBtn.className = 'btn btn-success';
+    channelsSelect.disabled = false;
   }
 
   function resetAll() {
     const wasPlaying = isPlaying;
     if (wasPlaying) stopPlayer();
     // clear fields
-    wsUrlInput.value = 'wss://example.net:8080/';
+    wsUrlInput.value = 'wss://backup.rolink.network:8080/';
     tokenInput.value = '';
+    channelsSelect.value = '1';
+    channelsSelect.disabled = false;
     setStatus('disconnected', 'Idle');
     updateConnInfo('reset');
     updateListenerCount(0);
