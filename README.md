@@ -226,7 +226,7 @@ override the defaults below.
 | Flag         | Default             | Description                            |
 |--------------|---------------------|-----------------------------------------|
 | -config      | -                   | Path to a JSON config file             |
-| -gen-config  | -                   | Generate a config template file and exit |
+| -gen-config  | *(required value)*  | Generate a config template file and exit — **takes the output path as its value**, e.g. `-gen-config config.json`. Running it bare (`-gen-config` with no path) is an error: `flag needs an argument: -gen-config` |
 | -wsport      | 8080                | WebSocket port (WSS or WS)             |
 | -pcmport     | 1235                | UDP port for the PCM audio source      |
 | -udpip       | 127.0.0.1           | IP address the UDP listener binds to   |
@@ -236,19 +236,60 @@ override the defaults below.
 | -channels    | 1                   | Audio channels: 1 (mono) or 2 (stereo) |
 | -mode        | speech              | Encoder profile: `speech` (narrowband-optimized, VOIP application) or `music` (full 20kHz bandwidth, higher complexity) — see below |
 | -maxclients  | 500                 | Max simultaneous WS clients (0 = unlimited) |
-| -log         | /var/log/proxy.log  | Log file path                          |
+| -log         | `/var/log/opus_relay.log` (Linux/macOS), `%TEMP%\opus_relay.log` (Windows) | Log file path — platform-aware default, see the Windows note below |
+| -jwtsecret   | `/opt/jwt.secret` (Linux/macOS), `%TEMP%\jwt.secret` (Windows) | Path to the JWT secret file |
+| -udpwaitwarn | 10                  | Seconds to wait for the first UDP audio packet before logging a warning (0 disables it) — see the logging note below |
 | -testtone    | false               | Generate a 440Hz test tone instead of reading UDP |
 | -debugjitter | false               | Log UDP gap diagnostics                |
 | -notls       | false               | Disable TLS (for use behind a reverse proxy) |
 | -noauth      | false               | Disable JWT authentication — local testing only, see below |
 | -v           | -                   | Print the version and exit             |
 
-> ⚠️ **`-noauth=true` fully disables authentication.** By default (no
-> flag) the server always requires a valid JWT — the secure behaviour.
-> Use `-noauth=true` only locally, to test quickly without generating
-> tokens. Never set it on a publicly reachable instance.
+> ⚠️ **`-noauth` fully disables authentication.** By default (no flag)
+> the server always requires a valid JWT — the secure behaviour.
+> `-noauth` is a plain boolean flag: writing it bare (`-noauth`) is
+> exactly equivalent to `-noauth=true` — this is standard Go `flag`
+> package behaviour for booleans, not something specific to this app.
+> `-noauth=false` (or omitting it) keeps auth on. Use it only locally,
+> to test quickly without generating tokens — never on a publicly
+> reachable instance.
 
-Generate an example config: `webproxy -gen-config config.json`
+Generate an example config (the output path is a required argument, not
+optional): `webproxy -gen-config config.json`
+
+### Startup / connection logging
+
+At startup the server logs that it's waiting for UDP
+audio, and:
+
+- If no packet arrives within `-udpwaitwarn` seconds (default 10), it
+  logs a `WARNING: no audio received on ... after Ns` line pointing at
+  the UDP address it's listening on — a clear signal to go check svxlink
+  / ffmpeg / whatever is supposed to be sending.
+- The first packet ever received logs `First audio packet received from
+  ... — source is live`.
+- Every start/stop of the audio (based on the same silence-gap detection
+  used for the `talker_start`/`talker_stop` WS messages) now logs
+  `Talker START (source: ...)` / `Talker STOP (silence detected, source:
+  ...)` — previously these were only sent to WS clients, not logged.
+
+
+### Measuring latency to a listener
+
+The server already pings every connected WS client every 30 seconds to
+keep idle connections alive; it now also times the round-trip to each
+pong and reports it two ways:
+
+- **Log**: `Latency to <addr>: <N>ms` every ~30s per connected client.
+- **WS message**: a control frame `{"type":"latency","rtt_ms":<N>}` sent
+  back to that same client, so a browser client can display it if it
+  chooses to listen for that message type (neither `opus-player.js` nor
+  `example.html` currently show it in the UI — this is just wired up on
+  the wire for now).
+
+This measures server↔client WebSocket round-trip time, not the total
+audio pipeline latency (UDP source → encode → WS → decode → playback) —
+those two are related but not the same number.
 
 ## 6. Reverse proxy mode (Nginx in front)
 
@@ -295,7 +336,7 @@ browser, paste a URL and a token (or leave the token empty if the server
 is running with `-noauth=true`), pick the channel count, and hit Start.
 Useful both as a quick manual test tool and as a reference implementation.
 
-### Protocol notes (apply to both clients)
+### Protocol notes
 
 Every binary message from the server has a 12-byte header
 (`seq` uint32 LE + `timestamp` uint64 LE) followed by the Opus packet — the

@@ -48,6 +48,7 @@ import "C"
 
 import (
 	"bufio"
+	"context"
 	"crypto/hmac"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -63,15 +64,34 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 	"unsafe"
 )
 
-const version = "2.9.1"
+const version = "1.0.1"
 const maxAccumulatorBytes = 48000 * 2 * 4
 const clientQueueDepth = 200
+
+func defaultLogPath(goos string) string {
+	if goos == "windows" {
+		return filepath.Join(os.TempDir(), "opus_relay.log")
+	}
+	return "/var/log/opus_relay.log"
+}
+
+func defaultJWTSecretPath(goos string) string {
+	if goos == "windows" {
+		return filepath.Join(os.TempDir(), "jwt.secret")
+	}
+	return "/opt/jwt.secret"
+}
 
 type Config struct {
 	WSPort             string `json:"ws_port"`
@@ -80,6 +100,7 @@ type Config struct {
 	TLSCert            string `json:"tls_cert"`
 	TLSKey             string `json:"tls_key"`
 	LogFile            string `json:"log_file"`
+	JWTSecretPath      string `json:"jwt_secret_path"`
 	OpusBitrate        int    `json:"opus_bitrate"`
 	SampleRate         int    `json:"sample_rate"`
 	Channels           int    `json:"channels"`
@@ -91,6 +112,7 @@ type Config struct {
 	SilenceThresholdMS int    `json:"silence_threshold_ms"`
 	MaxClients         int    `json:"max_clients"`
 	NoAuth             bool   `json:"no_auth"`
+	UDPWaitWarnSec     int    `json:"udp_wait_warn_sec"`
 }
 
 type JWTPayload struct {
@@ -101,6 +123,7 @@ type JWTPayload struct {
 }
 
 const wsGUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
+const controlQueueDepth = 20
 
 type wsMessage struct {
 	data   []byte
@@ -108,11 +131,14 @@ type wsMessage struct {
 }
 
 type wsConn struct {
-	conn      net.Conn
-	mu        sync.Mutex
-	closed    bool
-	sendQueue chan wsMessage
-	done      chan struct{}
+	conn         net.Conn
+	mu           sync.Mutex
+	closed       bool
+	sendQueue    chan wsMessage // binary audio frames
+	controlQueue chan wsMessage // text control frames — always drained first
+	done         chan struct{}
+	logger       *log.Logger
+	pingSentAt   atomic.Int64 // unix nano; 0 means no ping outstanding
 }
 
 type Hub struct {
@@ -132,7 +158,8 @@ func loadConfig(configPath string) (*Config, error) {
 		UDPIP:              "127.0.0.1",
 		TLSCert:            "",
 		TLSKey:             "",
-		LogFile:            "/var/log/proxy.log",
+		LogFile:            defaultLogPath(runtime.GOOS),
+		JWTSecretPath:      defaultJWTSecretPath(runtime.GOOS),
 		OpusBitrate:        16000,
 		SampleRate:         48000,
 		Channels:           1,
@@ -144,6 +171,7 @@ func loadConfig(configPath string) (*Config, error) {
 		SilenceThresholdMS: 300,
 		MaxClients:         500,
 		NoAuth:             false,
+		UDPWaitWarnSec:     10,
 	}
 
 	if configPath != "" {
@@ -170,7 +198,8 @@ func saveConfigTemplate(path string) error {
 		UDPIP:              "127.0.0.1",
 		TLSCert:            "/path/to/cert.pem",
 		TLSKey:             "/path/to/key.pem",
-		LogFile:            "/var/log/proxy.log",
+		LogFile:            defaultLogPath(runtime.GOOS),
+		JWTSecretPath:      defaultJWTSecretPath(runtime.GOOS),
 		OpusBitrate:        16000,
 		SampleRate:         48000,
 		Channels:           1,
@@ -182,6 +211,7 @@ func saveConfigTemplate(path string) error {
 		SilenceThresholdMS: 300,
 		MaxClients:         500,
 		NoAuth:             false,
+		UDPWaitWarnSec:     10,
 	}
 
 	file, err := os.Create(path)
@@ -195,8 +225,7 @@ func saveConfigTemplate(path string) error {
 	return encoder.Encode(template)
 }
 
-func getJWTSecret() (string, error) {
-	secretFile := "/opt/jwt.secret"
+func getJWTSecret(secretFile string) (string, error) {
 	data, err := os.ReadFile(secretFile)
 	if err != nil {
 		return "", fmt.Errorf("cannot read JWT secret from %s: %v", secretFile, err)
@@ -204,12 +233,12 @@ func getJWTSecret() (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func validateJWT(tokenString string) (*JWTPayload, error) {
+func validateJWT(tokenString string, secretPath string) (*JWTPayload, error) {
 	if tokenString == "" {
 		return nil, fmt.Errorf("empty token")
 	}
 
-	secret, err := getJWTSecret()
+	secret, err := getJWTSecret(secretPath)
 	if err != nil {
 		return nil, err
 	}
@@ -266,6 +295,27 @@ func (h *Hub) Count() int {
 	return len(h.clients)
 }
 
+func (h *Hub) CloseAll() {
+	h.mu.RLock()
+	clients := make([]*wsConn, 0, len(h.clients))
+	for c := range h.clients {
+		clients = append(clients, c)
+	}
+	h.mu.RUnlock()
+
+	for _, c := range clients {
+		c.mu.Lock()
+		if !c.closed {
+			closeFrame := []byte{0x88, 0x02, 0x03, 0xE8}
+			c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+			c.conn.Write(closeFrame)
+			c.closed = true
+			c.conn.Close()
+		}
+		c.mu.Unlock()
+	}
+}
+
 func (h *Hub) Broadcast(data []byte) {
 	h.mu.RLock()
 	clients := make([]*wsConn, 0, len(h.clients))
@@ -290,19 +340,11 @@ func (h *Hub) BroadcastControl(msg string) {
 	h.mu.RUnlock()
 
 	for _, c := range clients {
-		c.mu.Lock()
-		closed := c.closed
-		c.mu.Unlock()
-		if !closed {
-			select {
-			case c.sendQueue <- wsMessage{data: []byte(msg), isText: true}:
-			default:
-			}
-		}
+		c.enqueueControl(msg)
 	}
 }
 
-func upgradeWS(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
+func upgradeWS(w http.ResponseWriter, r *http.Request, logger *log.Logger) (*wsConn, error) {
 	if strings.ToLower(r.Header.Get("Upgrade")) != "websocket" {
 		return nil, fmt.Errorf("not a websocket request")
 	}
@@ -335,9 +377,11 @@ func upgradeWS(w http.ResponseWriter, r *http.Request) (*wsConn, error) {
 	}
 
 	c := &wsConn{
-		conn:      conn,
-		sendQueue: make(chan wsMessage, clientQueueDepth),
-		done:      make(chan struct{}),
+		conn:         conn,
+		sendQueue:    make(chan wsMessage, clientQueueDepth),
+		controlQueue: make(chan wsMessage, controlQueueDepth),
+		done:         make(chan struct{}),
+		logger:       logger,
 	}
 	go c.writeLoop()
 	go c.readLoop()
@@ -349,7 +393,27 @@ func (c *wsConn) writeLoop() {
 	defer ticker.Stop()
 
 	for {
+
 		select {
+		case msg, ok := <-c.controlQueue:
+			if !ok {
+				return
+			}
+			if err := c.writeFrame(msg.data, msg.isText); err != nil {
+				return
+			}
+			continue
+		default:
+		}
+
+		select {
+		case msg, ok := <-c.controlQueue:
+			if !ok {
+				return
+			}
+			if err := c.writeFrame(msg.data, msg.isText); err != nil {
+				return
+			}
 		case msg, ok := <-c.sendQueue:
 			if !ok {
 				return
@@ -358,6 +422,7 @@ func (c *wsConn) writeLoop() {
 				return
 			}
 		case <-ticker.C:
+			c.pingSentAt.Store(time.Now().UnixNano())
 			if err := c.writeFrame(nil, false, 0x9); err != nil {
 				return
 			}
@@ -422,6 +487,28 @@ func (c *wsConn) enqueue(data []byte) bool {
 	}
 }
 
+func (c *wsConn) enqueueControl(msg string) bool {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+
+	m := wsMessage{data: []byte(msg), isText: true}
+	select {
+	case c.controlQueue <- m:
+		return true
+	default:
+		select {
+		case <-c.controlQueue:
+		default:
+		}
+		c.controlQueue <- m
+		return true
+	}
+}
+
 func (c *wsConn) readLoop() {
 	defer func() {
 		c.mu.Lock()
@@ -432,6 +519,7 @@ func (c *wsConn) readLoop() {
 		c.mu.Unlock()
 		close(c.done)
 		close(c.sendQueue)
+		close(c.controlQueue)
 	}()
 
 	const idleTimeout = 90 * time.Second
@@ -497,6 +585,15 @@ func (c *wsConn) readLoop() {
 			pong := append([]byte{0x8A, byte(len(payload))}, payload...)
 			c.enqueue(pong)
 		case 0xA:
+			sentAt := c.pingSentAt.Swap(0)
+			if sentAt != 0 {
+				rtt := time.Duration(time.Now().UnixNano() - sentAt)
+				rttMs := float64(rtt) / float64(time.Millisecond)
+				if c.logger != nil {
+					c.logger.Printf("Latency to %s: %.1fms", c.conn.RemoteAddr(), rttMs)
+				}
+				c.enqueueControl(fmt.Sprintf(`{"type":"latency","rtt_ms":%.1f}`, rttMs))
+			}
 		}
 	}
 }
@@ -528,6 +625,9 @@ func newOpusEncoder(sampleRate, channels, bitrate int, musicMode bool) (*opusEnc
 }
 
 func (e *opusEncoder) Encode(pcm []int16, frameSamples int, out []byte) (int, error) {
+	if len(pcm) == 0 || frameSamples <= 0 {
+		return 0, nil
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
@@ -639,6 +739,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 	}
 
 	logger.Printf("UDP PCM listener on %s", addr)
+	logger.Printf("Waiting for audio on %s ... (will warn after %ds if nothing arrives)", addr, cfg.UDPWaitWarnSec)
 
 	enc, err := newOpusEncoder(cfg.SampleRate, cfg.Channels, cfg.OpusBitrate, cfg.Mode == "music")
 	if err != nil {
@@ -653,16 +754,24 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 	var gapCount int
 	talkerSilenceThreshold := time.Duration(cfg.SilenceThresholdMS) * time.Millisecond
 	talkerActive := false
+	firstPacketSeen := false
+	waitWarned := false
+	waitStart := time.Now()
+	waitWarnAfter := time.Duration(cfg.UDPWaitWarnSec) * time.Second
 
 	for {
 		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 		n, _, err := conn.ReadFrom(udpBuf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				if !firstPacketSeen && !waitWarned && waitWarnAfter > 0 && time.Since(waitStart) > waitWarnAfter {
+					waitWarned = true
+					logger.Printf("WARNING: no audio received on %s after %ds — check that your source (svxlink/ffmpeg/etc) is running and pointed at this address", addr, cfg.UDPWaitWarnSec)
+				}
 				if talkerActive && !lastPacketTime.IsZero() {
 					if time.Since(lastPacketTime) > talkerSilenceThreshold {
 						talkerActive = false
-						//logger.Printf("Talker STOP (silence detected)")
+						logger.Printf("Talker STOP (silence detected, source: %s)", addr)
 						hub.BroadcastControl(`{"type":"talker_stop"}`)
 					}
 				}
@@ -681,9 +790,14 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 			continue
 		}
 
+		if !firstPacketSeen {
+			firstPacketSeen = true
+			logger.Printf("First audio packet received from %s — source is live", addr)
+		}
+
 		if !talkerActive {
 			talkerActive = true
-			//logger.Printf("Talker START")
+			logger.Printf("Talker START (source: %s)", addr)
 			hub.BroadcastControl(`{"type":"talker_start"}`)
 		}
 
@@ -755,7 +869,7 @@ func wsHandler(cfg Config, hub *Hub, logger *log.Logger) http.HandlerFunc {
 			identity = "anonymous (auth disabled)"
 		} else {
 			token := r.URL.Query().Get("token")
-			payload, err := validateJWT(token)
+			payload, err := validateJWT(token, cfg.JWTSecretPath)
 			if err != nil {
 				logger.Printf("Auth FAILED from %s: %v", r.RemoteAddr, err)
 				http.Error(w, "unauthorized: invalid or expired token", http.StatusUnauthorized)
@@ -772,7 +886,7 @@ func wsHandler(cfg Config, hub *Hub, logger *log.Logger) http.HandlerFunc {
 			return
 		}
 
-		ws, err := upgradeWS(w, r)
+		ws, err := upgradeWS(w, r, logger)
 		if err != nil {
 			logger.Printf("WS upgrade error: %v", err)
 			http.Error(w, "websocket required", http.StatusBadRequest)
@@ -824,10 +938,12 @@ func main() {
 	flag.StringVar(&cfg.TLSCert, "cert", cfg.TLSCert, "TLS cert")
 	flag.StringVar(&cfg.TLSKey, "key", cfg.TLSKey, "TLS key")
 	flag.StringVar(&cfg.LogFile, "log", cfg.LogFile, "Log file")
+	flag.StringVar(&cfg.JWTSecretPath, "jwtsecret", cfg.JWTSecretPath, "Path to the JWT secret file")
 	flag.IntVar(&cfg.OpusBitrate, "bitrate", cfg.OpusBitrate, "Opus bitrate bps")
 	flag.IntVar(&cfg.Channels, "channels", cfg.Channels, "Audio channels: 1 (mono) or 2 (stereo)")
 	flag.StringVar(&cfg.Mode, "mode", cfg.Mode, "Encoder profile: speech or music")
 	flag.IntVar(&cfg.MaxClients, "maxclients", cfg.MaxClients, "Max simultaneous WS clients (0 = unlimited)")
+	flag.IntVar(&cfg.UDPWaitWarnSec, "udpwaitwarn", cfg.UDPWaitWarnSec, "Seconds to wait for first UDP audio before logging a warning (0 = disabled)")
 	flag.BoolVar(&cfg.TestTone, "testtone", cfg.TestTone, "Generate test tone instead of UDP input")
 	flag.BoolVar(&cfg.DebugJitter, "debugjitter", cfg.DebugJitter, "Log UDP gap diagnostics")
 	flag.BoolVar(&cfg.NoTLS, "notls", cfg.NoTLS, "Plain WS (behind reverse proxy)")
@@ -848,7 +964,7 @@ func main() {
 	}
 
 	logger := makeLogger(cfg.LogFile)
-	logger.Println("WebSocket Audio Proxy (Go/Opus)")
+	logger.Println("OpusRelay (lightweight PCM-to-Opus streaming proxy)")
 	logger.Printf("Version      : %s", version)
 	logger.Printf("UDP Listen   : %s:%d", cfg.UDPIP, cfg.PCMPort)
 	logger.Printf("WebSocket    : %s", cfg.WSPort)
@@ -871,9 +987,9 @@ func main() {
 		logger.Println("######################################################")
 		logger.Println("# WARNING: AUTHENTICATION IS DISABLED (-noauth=true) #")
 		logger.Println("######################################################")
-	} else if _, err := getJWTSecret(); err != nil {
+	} else if _, err := getJWTSecret(cfg.JWTSecretPath); err != nil {
 		logger.Printf("WARNING: JWT secret file not found: %v", err)
-		logger.Printf("Please ensure /opt/jwt.secret exists and is readable")
+		logger.Printf("Please ensure %s exists and is readable", cfg.JWTSecretPath)
 	}
 
 	hub := NewHub()
@@ -882,24 +998,40 @@ func main() {
 	mux := http.NewServeMux()
 	mux.Handle("/", securityMiddleware(http.HandlerFunc(wsHandler(*cfg, hub, logger))))
 
-	if cfg.NoTLS {
-		addr := ":" + cfg.WSPort
-		logger.Printf("Plain WS on ws://0.0.0.0%s", addr)
-		if err := http.ListenAndServe(addr, mux); err != nil {
-			logger.Fatalf("Server: %v", err)
-		}
-	} else {
-		srv := &http.Server{
-			Addr:    ":" + cfg.WSPort,
-			Handler: mux,
-			TLSConfig: &tls.Config{
-				MinVersion:       tls.VersionTLS12,
-				CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256},
-			},
-		}
-		logger.Printf("Secure WSS on wss://0.0.0.0:%s", cfg.WSPort)
-		if err := srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey); err != nil {
-			logger.Fatalf("Server: %v", err)
+	srv := &http.Server{
+		Addr:    ":" + cfg.WSPort,
+		Handler: mux,
+	}
+	if !cfg.NoTLS {
+		srv.TLSConfig = &tls.Config{
+			MinVersion:       tls.VersionTLS12,
+			CurvePreferences: []tls.CurveID{tls.X25519, tls.CurveP256},
 		}
 	}
+
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, os.Interrupt, syscall.SIGTERM)
+	go func() {
+		sig := <-sigCh
+		logger.Printf("Received %v, shutting down...", sig)
+		hub.CloseAll()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			logger.Printf("Shutdown error: %v", err)
+		}
+	}()
+
+	var srvErr error
+	if cfg.NoTLS {
+		logger.Printf("Plain WS on ws://0.0.0.0:%s", cfg.WSPort)
+		srvErr = srv.ListenAndServe()
+	} else {
+		logger.Printf("Secure WSS on wss://0.0.0.0:%s", cfg.WSPort)
+		srvErr = srv.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+	}
+	if srvErr != nil && srvErr != http.ErrServerClosed {
+		logger.Fatalf("Server: %v", srvErr)
+	}
+	logger.Println("Server stopped")
 }
