@@ -13,21 +13,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libopus-dev gcc
-    
+        sudo apt-get install -y libopus-dev gcc pkg-config
     - name: Build
       run: |
         GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
         go build -ldflags="-s -w" -o webproxy-linux-amd64 webproxy.go
-    
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-linux-amd64
@@ -38,22 +34,25 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y libopus-dev gcc-arm-linux-gnueabihf
-    
+        sudo apt-get install -y \
+          gcc-arm-linux-gnueabihf \
+          libc6-dev-armhf-cross \
+          pkg-config-arm-linux-gnueabihf
+        sudo dpkg --add-architecture armhf
+        sudo apt-get update
+        sudo apt-get install -y libopus-dev:armhf
     - name: Build
       run: |
-        CC=arm-linux-gnueabihf-gcc \
+        export CC=arm-linux-gnueabihf-gcc
+        export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
         GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 \
         go build -ldflags="-s -w" -o webproxy-linux-armhf webproxy.go
-    
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-linux-armhf
@@ -64,22 +63,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v4
-    
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    
     - name: Install dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-mingw-w64-x86-64 libopus-dev
-    
+        sudo apt-get install -y gcc-mingw-w64-x86-64
+        cd /tmp
+        wget https://opus-codec.org/release/stable/opus-1.4.tar.gz
+        tar -xzf opus-1.4.tar.gz
+        cd opus-1.4
+        ./configure --host=x86_64-w64-mingw32 --prefix=/usr/x86_64-w64-mingw32
+        make
+        sudo make install
     - name: Build
       run: |
-        CC=x86_64-w64-mingw32-gcc \
+        export CC=x86_64-w64-mingw32-gcc
+        export CXX=x86_64-w64-mingw32-g++
+        export PKG_CONFIG_PATH=/usr/x86_64-w64-mingw32/lib/pkgconfig
         GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
         go build -ldflags="-s -w" -o webproxy-windows-amd64.exe webproxy.go
-    
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-windows-amd64
