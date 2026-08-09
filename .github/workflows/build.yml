@@ -42,18 +42,28 @@ jobs:
     container:
       image: debian:bullseye
     steps:
-    - name: Install Git & Base tools
+    - name: Install Base Tools & Add Architecture
       run: |
         apt-get update
-        apt-get install -y git wget gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libopus-dev:armhf pkg-config golang-go
+        apt-get install -y git wget gcc-arm-linux-gnueabihf libc6-dev-armhf-cross pkg-config
         dpkg --add-architecture armhf
+        apt-get update
+        apt-get install -y libopus-dev:armhf
+
     - uses: actions/checkout@v4
+
+    - name: Install Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: '1.21'
+
     - name: Build
       run: |
         export CC=arm-linux-gnueabihf-gcc
         export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
         GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 \
         go build -ldflags="-s -w" -o webproxy-linux-armhf webproxy.go
+
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-linux-armhf
