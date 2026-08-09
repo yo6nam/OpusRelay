@@ -37,15 +37,22 @@ jobs:
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    - name: Install dependencies
+    - name: Configure Ubuntu Ports for armhf & Install dependencies
       run: |
+        # Redirectioneaza arhitectura armhf catre archive/ports corecte pentru Ubuntu 24.04 (Noble)
+        sudo sed -i 's/deb http/deb [arch=amd64,i386] http/g' /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true
+        
+        # Adauga repo-ul de ports pentru armhf
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/armhf.list
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
+        echo "deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports noble-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/armhf.list
+
+        sudo dpkg --add-architecture armhf
         sudo apt-get update
         sudo apt-get install -y \
           gcc-arm-linux-gnueabihf \
-          libc6-dev-armhf-cross
-        sudo dpkg --add-architecture armhf
-        sudo apt-get update
-        sudo apt-get install -y libopus-dev:armhf
+          libc6-dev-armhf-cross \
+          libopus-dev:armhf
     - name: Build
       run: |
         export CC=arm-linux-gnueabihf-gcc
@@ -65,16 +72,17 @@ jobs:
     - uses: actions/setup-go@v5
       with:
         go-version: '1.21'
-    - name: Install dependencies
+    - name: Install dependencies and Opus from Xiph Official Mirror
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-mingw-w64-x86-64
+        sudo apt-get install -y gcc-mingw-w64-x86-64 make
         cd /tmp
-        wget https://opus-codec.org/release/stable/opus-1.5.2.tar.gz
+        # Descarcare de pe oglinda oficiala Xiph/Downloads unde tarball-urile sunt permanente
+        wget https://downloads.xiph.org/releases/opus/opus-1.5.2.tar.gz
         tar -xzf opus-1.5.2.tar.gz
         cd opus-1.5.2
         ./configure --host=x86_64-w64-mingw32 --prefix=/usr/x86_64-w64-mingw32
-        make
+        make -j$(nproc)
         sudo make install
     - name: Build
       run: |
