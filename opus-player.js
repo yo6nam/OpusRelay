@@ -21,6 +21,7 @@ let peakMeter    = null;
 let opusDecoder  = null;
 let nextPlayTime = 0;
 let timestamp    = 0;
+let lastRttMs    = null;
 
 const style = document.createElement('style');
 style.textContent = `
@@ -61,7 +62,7 @@ function updateConnectionStatus(status) {
         case 'connected':
             statusIndicator.style.backgroundColor = 'rgb(152, 255, 156)';
             statusIndicator.style.boxShadow = '0 0 6px #4caf50';
-            statusIndicator.title = 'Connected';
+            statusIndicator.title = lastRttMs !== null ? `Connected — ${lastRttMs}ms` : 'Connected';
             break;
         case 'disconnected':
             statusIndicator.style.backgroundColor = '#f44336';
@@ -161,9 +162,6 @@ function initDecoder() {
 
             const nFrames = audioData.numberOfFrames;
             const ab = audioCtx.createBuffer(CHANNELS, nFrames, SAMPLE_RATE);
-            // Copy every channel plane — copying only planeIndex 0 silently
-            // drops every channel past the first (e.g. the right channel
-            // in stereo).
             const buf = new Float32Array(nFrames);
             for (let ch = 0; ch < CHANNELS; ch++) {
                 audioData.copyTo(buf, { planeIndex: ch, format: 'f32-planar' });
@@ -172,7 +170,10 @@ function initDecoder() {
             audioData.close();
 
             const now = audioCtx.currentTime;
-            if (nextPlayTime < now) nextPlayTime = now + 0.10;
+
+            if (nextPlayTime < now || nextPlayTime - now > 0.3) {
+                nextPlayTime = now + 0.10;
+            }
 
             const src = audioCtx.createBufferSource();
             src.buffer = ab;
@@ -220,6 +221,9 @@ function connectWebSocket() {
                     nextPlayTime = 0;
                 } else if (msg.type === 'client_count') {
                     updateListenerCount(msg.count);
+                } else if (msg.type === 'latency') {
+                    lastRttMs = Math.round(msg.rtt_ms);
+                    updateConnectionStatus('connected');
                 }
             } catch(e) {}
             return;
@@ -312,6 +316,7 @@ function stopPlayer() {
     }
 
     nextPlayTime = 0;
+    lastRttMs = null;
 
     updateConnectionStatus('disconnected');
 

@@ -379,7 +379,10 @@
         audioData.close();
 
         const now = audioCtx.currentTime;
-        if (nextPlayTime < now) nextPlayTime = now + 0.10;
+
+        if (nextPlayTime < now || nextPlayTime - now > 0.3) {
+          nextPlayTime = now + 0.10;
+        }
 
         const src = audioCtx.createBufferSource();
         src.buffer = ab;
