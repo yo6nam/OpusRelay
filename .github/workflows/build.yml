@@ -38,20 +38,16 @@ jobs:
 
   build-linux-armhf:
     name: Build Linux armhf
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bullseye
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
-      with:
-        go-version: '1.21'
-    - name: Install dependencies
+    - name: Install Git & Base tools
       run: |
-        sudo dpkg --add-architecture armhf
-        sudo apt-get update
-        sudo apt-get install -y \
-          gcc-arm-linux-gnueabihf \
-          libc6-dev-armhf-cross \
-          libopus-dev:armhf
+        apt-get update
+        apt-get install -y git wget gcc-arm-linux-gnueabihf libc6-dev-armhf-cross libopus-dev:armhf pkg-config golang-go
+        dpkg --add-architecture armhf
+    - uses: actions/checkout@v4
     - name: Build
       run: |
         export CC=arm-linux-gnueabihf-gcc
