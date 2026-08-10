@@ -1,11 +1,11 @@
-// gen-test-token creates a JWT compatible with webproxy.go's validateJWT(),
+// gen-test-token creates a JWT compatible with webproxy's validateJWT(),
 // for local testing only. Do NOT use this to issue real user tokens in
 // production — your actual auth backend should do that.
 //
 // Usage:
 //
-//	go run token_gen.go -email test@example.com -level admin -ttl 1h
-//	go run token_gen.go -secret-file /opt/jwt.secret -ttl 10m
+//	go run utils/token_gen.go -email test@example.com -level admin -ttl 1h
+//	go run utils/token_gen.go -secret-file /opt/jwt.secret -ttl 10m
 package main
 
 import (
@@ -75,7 +75,7 @@ func main() {
 	token := signingInput + "." + sig
 
 	fmt.Println(token)
-	fmt.Fprintf(os.Stderr, "\nemail=%s level=%s expires at %s (after %s)\n",
+	fmt.Fprintf(os.Stderr, "\nemail=%s level=%s expiră la %s (peste %s)\n",
 		email, level, time.Unix(p.Exp, 0).Format(time.RFC3339), ttl)
-	fmt.Fprintf(os.Stderr, "wss://<host>:<wsport>/?token=%s\n", token)
+	fmt.Fprintf(os.Stderr, "conectare test: wss://<host>:<wsport>/?token=%s\n", token)
 }

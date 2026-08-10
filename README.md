@@ -133,8 +133,16 @@ connecting with `example.html` and listening.
 
 ```
 opusrelay/
-├── webproxy.go       — the server (build target: go build webproxy.go)
-├── token_gen.go       — standalone JWT generator for local testing
+├── main.go            — flag parsing, startup, graceful shutdown
+├── config.go           — Config struct, loadConfig, saveConfigTemplate
+├── auth.go              — JWTPayload, validateJWT, getJWTSecret
+├── opus.go                — CGo wrapper around libopus, isolated from the rest
+├── hub.go                   — client registry, Broadcast / BroadcastControl
+├── websocket.go               — hand-rolled RFC 6455 connection handling
+├── pcm.go                       — UDP audio ingestion, test tone, traffic stats
+├── server.go                      — HTTP middleware, wsHandler, logger setup
+├── utils/
+│   └── token_gen.go                — standalone JWT generator for local testing
 ├── opus-player.js     — embeddable client library
 ├── example.html       — standalone demo/test client (no host page needed)
 ├── webproxy.service    — systemd unit
@@ -143,11 +151,14 @@ opusrelay/
 └── .gitignore
 ```
 
-`webproxy.go` and `token_gen.go` both declare `package main` with their own
-`func main()`. That's intentional, but it means this directory is **not**
-a normal buildable Go package — always build each file explicitly
-(`go build webproxy.go`, `go run token_gen.go`), never `go build .` or
-`go build ./...`, which would fail with a duplicate `main` error.
+`main.go` through `server.go` are all `package main` in the repo root —
+together they're one normal, buildable Go package: `go build .` (or
+`go build -o webproxy .`) picks up all eight files automatically, same as
+any standard Go program. `utils/token_gen.go` lives in its own
+subdirectory specifically so it *doesn't* end up in that package — it's
+also `package main` with its own `func main()`, and two `main()` funcs in
+the same package would collide. Build it separately: `go run
+utils/token_gen.go` or `go build -o token_gen utils/token_gen.go`.
 
 ## 1. Installing a modern Go toolchain (Go 1.21)
 
@@ -176,11 +187,15 @@ apt install libopus-dev gcc
 
 ```bash
 mkdir -p /opt/opusrelay
-cp webproxy.go go.mod /opt/opusrelay/
+cp *.go go.mod /opt/opusrelay/
 cd /opt/opusrelay
 
-# No "go mod tidy" needed — zero external dependencies
-go build -o /usr/local/bin/webproxy webproxy.go
+# No "go mod tidy" needed — zero external dependencies.
+# go build . compiles every .go file in this directory as one package —
+# that's main.go, config.go, auth.go, opus.go, hub.go, websocket.go,
+# pcm.go and server.go together. utils/token_gen.go is intentionally
+# outside this directory, see "Project layout" above.
+go build -o /usr/local/bin/webproxy .
 ```
 
 Typical build: ~5 seconds, ~4MB binary.
@@ -189,7 +204,7 @@ Optional smaller binary for production (strips debug symbols/DWARF info —
 keep an unstripped build around if you ever need a readable stack trace):
 
 ```bash
-go build -ldflags="-s -w" -o /usr/local/bin/webproxy webproxy.go
+go build -ldflags="-s -w" -o /usr/local/bin/webproxy .
 ```
 
 Note this is dynamically linked against `libopus` — the target machine
@@ -411,20 +426,22 @@ webproxy -wsport 8080 -pcmport 1235 -notls -noauth=true
 The server prints a visible warning in the log at startup for as long as
 authentication is disabled. For testing with real authentication, or for
 any public deployment, don't set this flag and use a token from
-`token_gen.go` (next section).
+`utils/token_gen.go` (next section).
 
 ## 9. Generating a JWT for testing
 
-`token_gen.go` creates a token compatible with `validateJWT` in
-`webproxy.go` (HS256, signed with the same secret as the server). This is
+`utils/token_gen.go` creates a token compatible with `validateJWT` in
+`auth.go` (HS256, signed with the same secret as the server). This is
 for local testing only — your real auth backend should issue tokens for
-actual users.
+actual users. It's a standalone `package main` file, deliberately kept
+outside the main server package (see "Project layout") — build/run it on
+its own.
 
 ```bash
 # if you don't already have a secret at /opt/jwt.secret:
 openssl rand -hex 32 > /opt/jwt.secret
 
-go run token_gen.go \
+go run utils/token_gen.go \
     -email test@example.com \
     -level listener \
     -ttl 1h
@@ -444,4 +461,17 @@ straight into `example.html`'s token field for a quick manual test.
 | Bandwidth/client     | ~768 kbps          | ~16–32 kbps       |
 | External dependencies | ws, npm           | **zero** (stdlib) |
 | Minimum Go version   | —                  | 1.13+             |
+
+## Notes
+
+The server was originally a single ~1090-line `webproxy.go`. It's now
+split into eight files by responsibility (`main.go`, `config.go`,
+`auth.go`, `opus.go`, `hub.go`, `websocket.go`, `pcm.go`, `server.go`) —
+same package, same behavior, just organized for readability. As part of
+that change, `token_gen.go` moved into its own `utils/` subdirectory
+(unchanged otherwise) so the repo root can be a normal, single-`main()`
+Go package buildable with `go build .` — previously `token_gen.go` sharing
+the root directory meant only single-file builds worked, and `go build .`
+would have failed with a duplicate `main` error the moment the server
+code was split across more than one file.
 

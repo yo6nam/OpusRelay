@@ -1,0 +1,76 @@
+package main
+
+import (
+	"fmt"
+	"io"
+	"log"
+	"net/http"
+	"os"
+)
+
+func securityMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if r.Method != "GET" && r.Method != "HEAD" {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		r.Body = http.MaxBytesReader(w, r.Body, 4096)
+		next.ServeHTTP(w, r)
+	})
+}
+
+func makeLogger(path string) *log.Logger {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("Log file: %v", err)
+	}
+	return log.New(io.MultiWriter(os.Stdout, f), "", log.Ldate|log.Ltime)
+}
+
+func wsHandler(cfg Config, hub *Hub, logger *log.Logger) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var identity string
+
+		if cfg.NoAuth {
+			identity = "anonymous (auth disabled)"
+		} else {
+			token := r.URL.Query().Get("token")
+			payload, err := validateJWT(token, cfg.JWTSecretPath)
+			if err != nil {
+				logger.Printf("Auth FAILED from %s: %v", r.RemoteAddr, err)
+				http.Error(w, "unauthorized: invalid or expired token", http.StatusUnauthorized)
+				return
+			}
+			identity = fmt.Sprintf("%s (level=%s)", payload.Email, payload.Level)
+		}
+
+		logger.Printf("Client authenticated: %s from %s", identity, r.RemoteAddr)
+
+		if cfg.MaxClients > 0 && hub.Count() >= cfg.MaxClients {
+			logger.Printf("Rejected %s: max clients (%d) reached", r.RemoteAddr, cfg.MaxClients)
+			http.Error(w, "server full", http.StatusServiceUnavailable)
+			return
+		}
+
+		ws, err := upgradeWS(w, r, logger)
+		if err != nil {
+			logger.Printf("WS upgrade error: %v", err)
+			http.Error(w, "websocket required", http.StatusBadRequest)
+			return
+		}
+
+		remote := ws.conn.RemoteAddr().String()
+		hub.Add(ws)
+		count := hub.Count()
+		logger.Printf("Client connected: %s (total: %d)", remote, count)
+		hub.BroadcastControl(fmt.Sprintf(`{"type":"client_count","count":%d}`, count))
+
+		ws.Wait()
+
+		hub.Remove(ws)
+		count = hub.Count()
+		logger.Printf("Client disconnected: %s (total: %d)", remote, count)
+		hub.BroadcastControl(fmt.Sprintf(`{"type":"client_count","count":%d}`, count))
+	}
+}
