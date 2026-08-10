@@ -6,7 +6,7 @@ browsers over WebSocket — with JWT authentication and a native WebCodecs
 client.
 
 > **Initial context:** This project was originally developed to enable real-time
-> monitoring of radio traffic on a reflector running SVXLink, allowing users
+> monitoring of radio traffic on a reflector running SVXLink (**[RoLink Network](https://rolink.network/)**), allowing users
 > to listen to radio communications directly in their browser without the
 > need for dedicated radio equipment. Over time, it was extended to support
 > other generic audio sources, making it a versatile tool for live audio
@@ -61,7 +61,7 @@ ffmpeg -re -i <stereo-source> -f s16le -ar 48000 -ac 2 udp://127.0.0.1:1235
 Any other tool that can emit raw audio over UDP (GStreamer's `udpsink`,
 `sox`, a Python script using `socket`) works just as well. The
 `talker_start`/`talker_stop` detection (based on gaps between UDP packets)
-is designed for PTT-style traffic (svxlink, Asterisk with VAD) — for a
+is designed for PTT-style traffic (svxlink, Asterisk) — for a
 continuous 24/7 stream, the "someone is talking" indicator fires once and
 essentially never returns to "stop"; this doesn't affect the audio itself,
 only that one visual indicator in the client.
@@ -152,15 +152,6 @@ opusrelay/
 ├── LICENSE
 └── .gitignore
 ```
-
-`main.go` through `server.go` are all `package main` in the repo root —
-together they're one normal, buildable Go package: `go build .` (or
-`go build -o webproxy .`) picks up all eight files automatically, same as
-any standard Go program. `utils/token_gen.go` lives in its own
-subdirectory specifically so it *doesn't* end up in that package — it's
-also `package main` with its own `func main()`, and two `main()` funcs in
-the same package would collide. Build it separately: `go run
-utils/token_gen.go` or `go build -o token_gen utils/token_gen.go`.
 
 ## 1. Installing a modern Go toolchain (Go 1.21)
 
@@ -266,15 +257,10 @@ override the defaults below.
 
 > ⚠️ **`-noauth` fully disables authentication.** By default (no flag)
 > the server always requires a valid JWT — the secure behaviour.
-> `-noauth` is a plain boolean flag: writing it bare (`-noauth`) is
-> exactly equivalent to `-noauth=true` — this is standard Go `flag`
-> package behaviour for booleans, not something specific to this app.
-> `-noauth=false` (or omitting it) keeps auth on. Use it only locally,
-> to test quickly without generating tokens — never on a publicly
+> Use it only locally, to test quickly without generating tokens — never on a publicly
 > reachable instance.
 
-Generate an example config (the output path is a required argument, not
-optional): `webproxy -gen-config config.json`
+Generate an example config : `webproxy -gen-config config.json`
 
 ### Startup / connection logging
 
@@ -288,9 +274,7 @@ audio, and:
 - The first packet ever received logs `First audio packet received from
   ... — source is live`.
 - Every start/stop of the audio (based on the same silence-gap detection
-  used for the `talker_start`/`talker_stop` WS messages) now logs
-  `Talker START (source: ...)` / `Talker STOP (silence detected, source:
-  ...)` — previously these were only sent to WS clients, not logged.
+  used for the `talker_start`/`talker_stop` WS messages)
 
 
 ### Measuring latency to a listener
@@ -304,7 +288,7 @@ and reports it two ways:
   back to that same client. `opus-player.js` shows it in the connection
   indicator's tooltip; `example.html` shows it in its own latency badge.
 
-This measures server↔client WebSocket round-trip time, not the total
+This measures server ↔ client WebSocket round-trip time, not the total
 audio pipeline latency (UDP source → encode → WS → decode → playback) —
 those two are related but not the same number.
 
@@ -398,7 +382,7 @@ input fields, a Channels dropdown (Mono/Stereo — must match the server's
 `-channels` flag), connection status indicator, listener count, reset
 button. Doesn't need a host page or any globals; just open it in a
 browser, paste a URL and a token (or leave the token empty if the server
-is running with `-noauth=true`), pick the channel count, and hit Start.
+is running with `-noauth`), pick the channel count, and hit Start.
 Useful both as a quick manual test tool and as a reference implementation.
 
 ### Protocol notes (apply to both clients)
@@ -463,3 +447,12 @@ straight into `example.html`'s token field for a quick manual test.
 | Bandwidth/client     | ~768 kbps          | ~16–32 kbps       |
 | External dependencies | ws, npm           | **zero** (stdlib) |
 | Minimum Go version   | —                  | 1.13+             |
+
+## Development notes
+
+AI tools were used extensively during development as a coding and
+research assistant, including for generating and refactoring code,
+debugging, exploring implementation approaches, and improving
+documentation. The project architecture, feature requirements, technical
+decisions, testing, and final code integration were performed and
+validated by the author.
