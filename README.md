@@ -13,7 +13,7 @@ client.
 > streaming.
 
 
-**[Live demo](https://yo6nam.github.io/OpusRelay/example.html)**
+**[Live demo](https://yo6nam.github.io/OpusRelay/web/example.html)**
 
 ## Why zero external dependencies?
 
@@ -133,19 +133,21 @@ connecting with `example.html` and listening.
 
 ```
 opusrelay/
-├── main.go            — flag parsing, startup, graceful shutdown
-├── config.go           — Config struct, loadConfig, saveConfigTemplate
-├── auth.go              — JWTPayload, validateJWT, getJWTSecret
-├── opus.go                — CGo wrapper around libopus, isolated from the rest
-├── hub.go                   — client registry, Broadcast / BroadcastControl
-├── websocket.go               — hand-rolled RFC 6455 connection handling
-├── pcm.go                       — UDP audio ingestion, test tone, traffic stats
-├── server.go                      — HTTP middleware, wsHandler, logger setup
 ├── utils/
-│   └── token_gen.go                — standalone JWT generator for local testing
-├── opus-player.js     — embeddable client library
-├── example.html       — standalone demo/test client (no host page needed)
-├── webproxy.service    — systemd unit
+│   └── token_gen.go          — standalone JWT generator for local testing
+├── web/
+│   └── example.html          — standalone demo/test client (no host page needed)
+│   └── js/
+│       └──  opus-player.js   — embeddable client library
+├── main.go                   — flag parsing, startup, graceful shutdown
+├── config.go                 — Config struct, loadConfig, saveConfigTemplate
+├── auth.go                   — JWTPayload, validateJWT, getJWTSecret
+├── opus.go                   — CGo wrapper around libopus, isolated from the rest
+├── hub.go                    — client registry, Broadcast / BroadcastControl
+├── websocket.go              — hand-rolled RFC 6455 connection handling
+├── pcm.go                    — UDP audio ingestion, test tone, traffic stats
+├── server.go                 — HTTP middleware, wsHandler, logger setup
+├── webproxy.service          — systemd unit
 ├── go.mod
 ├── LICENSE
 └── .gitignore
@@ -374,7 +376,7 @@ location /ws {
 
 There are two, for two different use cases:
 
-### `opus-player.js` — embeddable library
+### `web/js/opus-player.js` — embeddable library
 
 Drop this into an existing page (e.g. an svxlink status page) that already
 has a `#togglePlayer` button and a `#peak-meter` container, plus jQuery
@@ -386,10 +388,10 @@ loaded. Configure it via globals set **before** the script tag:
   window.AUDIO_TOKEN      = "eyJhbGciOi...";
   window.AUDIO_CHANNELS   = 2; // defaults to 1 (mono) if unset — must match the server's -channels flag
 </script>
-<script src="opus-player.js"></script>
+<script src="web/js/opus-player.js"></script>
 ```
 
-### `example.html` — standalone demo/test client
+### `web/example.html` — standalone demo/test client
 
 A self-contained page with its own UI — WebSocket URL and token as editable
 input fields, a Channels dropdown (Mono/Stereo — must match the server's
@@ -461,17 +463,3 @@ straight into `example.html`'s token field for a quick manual test.
 | Bandwidth/client     | ~768 kbps          | ~16–32 kbps       |
 | External dependencies | ws, npm           | **zero** (stdlib) |
 | Minimum Go version   | —                  | 1.13+             |
-
-## Notes
-
-The server was originally a single ~1090-line `webproxy.go`. It's now
-split into eight files by responsibility (`main.go`, `config.go`,
-`auth.go`, `opus.go`, `hub.go`, `websocket.go`, `pcm.go`, `server.go`) —
-same package, same behavior, just organized for readability. As part of
-that change, `token_gen.go` moved into its own `utils/` subdirectory
-(unchanged otherwise) so the repo root can be a normal, single-`main()`
-Go package buildable with `go build .` — previously `token_gen.go` sharing
-the root directory meant only single-file builds worked, and `go build .`
-would have failed with a duplicate `main` error the moment the server
-code was split across more than one file.
-
