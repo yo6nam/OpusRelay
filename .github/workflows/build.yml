@@ -24,7 +24,7 @@ jobs:
     - name: Build
       run: |
         GOOS=linux GOARCH=amd64 CGO_ENABLED=1 \
-        go build -ldflags="-s -w" -o webproxy-linux-amd64 webproxy.go
+        go build -ldflags="-s -w" -o webproxy-linux-amd64 .
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-linux-amd64
@@ -56,7 +56,7 @@ jobs:
         export CC=arm-linux-gnueabihf-gcc
         export PKG_CONFIG_PATH=/usr/lib/arm-linux-gnueabihf/pkgconfig
         GOOS=linux GOARCH=arm GOARM=7 CGO_ENABLED=1 \
-        go build -ldflags="-s -w" -o webproxy-linux-armhf webproxy.go
+        go build -ldflags="-s -w" -o webproxy-linux-armhf .
 
     - uses: actions/upload-artifact@v4
       with:
@@ -88,7 +88,7 @@ jobs:
         export CXX=x86_64-w64-mingw32-g++
         export PKG_CONFIG_PATH=/usr/x86_64-w64-mingw32/lib/pkgconfig
         GOOS=windows GOARCH=amd64 CGO_ENABLED=1 \
-        go build -ldflags="-s -w -extldflags '-static'" -o webproxy-windows-amd64.exe webproxy.go
+        go build -ldflags="-s -w -extldflags '-static'" -o webproxy-windows-amd64.exe .
     - uses: actions/upload-artifact@v4
       with:
         name: webproxy-windows-amd64
