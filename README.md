@@ -12,6 +12,7 @@ client.
 > other generic audio sources, making it a versatile tool for live audio
 > streaming.
 
+
 **[Live demo](https://yo6nam.github.io/OpusRelay/example.html)**
 
 ## Why zero external dependencies?
@@ -239,6 +240,7 @@ override the defaults below.
 | -log         | `/var/log/opus_relay.log` (Linux/macOS), `%TEMP%\opus_relay.log` (Windows) | Log file path — platform-aware default, see the Windows note below |
 | -jwtsecret   | `/opt/jwt.secret` (Linux/macOS), `%TEMP%\jwt.secret` (Windows) | Path to the JWT secret file |
 | -udpwaitwarn | 10                  | Seconds to wait for the first UDP audio packet before logging a warning (0 disables it) — see the logging note below |
+| -statsinterval | 2                 | Seconds between traffic-stats WS broadcasts (0 disables it) — see below |
 | -testtone    | false               | Generate a 440Hz test tone instead of reading UDP |
 | -debugjitter | false               | Log UDP gap diagnostics                |
 | -notls       | false               | Disable TLS (for use behind a reverse proxy) |
@@ -277,19 +279,65 @@ audio, and:
 ### Measuring latency to a listener
 
 The server already pings every connected WS client every 30 seconds to
-keep idle connections alive; it now also times the round-trip to each
-pong and reports it two ways:
+keep idle connections alive; it also times the round-trip to each pong
+and reports it two ways:
 
 - **Log**: `Latency to <addr>: <N>ms` every ~30s per connected client.
 - **WS message**: a control frame `{"type":"latency","rtt_ms":<N>}` sent
-  back to that same client, so a browser client can display it if it
-  chooses to listen for that message type (neither `opus-player.js` nor
-  `example.html` currently show it in the UI — this is just wired up on
-  the wire for now).
+  back to that same client. `opus-player.js` shows it in the connection
+  indicator's tooltip; `example.html` shows it in its own latency badge.
 
 This measures server↔client WebSocket round-trip time, not the total
 audio pipeline latency (UDP source → encode → WS → decode → playback) —
 those two are related but not the same number.
+
+### Traffic / bitrate feedback
+
+Every `-statsinterval` seconds (default 2, `0` disables it) the server
+broadcasts a control frame with what it's actually seeing on the wire,
+to every connected client. The fields are split into three distinct
+things — source feed, single Opus stream, and total server egress —
+because they answer different questions and don't move together:
+
+```json
+{"type":"stats","source_bitrate_bps":1624181,"opus_bitrate_bps":68470,"egress_bitrate_bps":68470,"savings_percent":95.8,"listeners":1,"channels":2,"mode":"music"}
+```
+
+- **`source_bitrate_bps`** — the raw incoming PCM rate from the UDP
+  source, *before* this proxy touches it. Fixed by sample rate/channels
+  (e.g. 48kHz stereo 16-bit ≈ 1.5Mbps), not affected by `-bitrate` or
+  `-mode` at all. Useful as an independent sanity check: if this drops
+  to `0` while your source app is supposedly running, the problem is
+  upstream of this server (not reaching the UDP listener), not in the
+  Opus encoding or the WS relay. Always `0` in test-tone mode
+  (`-testtone`), since there's no UDP input to measure.
+- **`opus_bitrate_bps`** — what a *single* Opus stream actually costs,
+  measured from real encoded bytes over the interval. Opus is VBR, so
+  this fluctuates around (but rarely equals exactly) whatever
+  `-bitrate` is set to — silence encodes far below it, busy/complex
+  audio can run slightly above it. This is the number that matters for
+  "how much bandwidth does one listener cost."
+- **`savings_percent`** — `(1 - opus_bitrate_bps / source_bitrate_bps) × 100`,
+  i.e. how much smaller the compressed stream is than the raw source
+  feed. This is the number that answers "what is this proxy buying me"
+  — typically 90%+ for voice/PTT traffic, a bit less for `-mode music`
+  at higher bitrates since that trades some of the savings for quality.
+- **`egress_bitrate_bps`** — `opus_bitrate_bps × listeners`, the
+  server's *actual total* outbound bandwidth right now. This is the
+  one that doesn't match `opus_bitrate_bps` once you have more than one
+  listener: each connected client gets their own unicast copy of the
+  same Opus stream over WS, so total egress scales linearly with
+  listener count even though the per-listener cost stays flat. This is
+  the number that matters for server-side bandwidth planning.
+- `listeners` — current WS client count (same number as `client_count`
+  messages).
+- `channels` / `mode` — the server's current config, included so a
+  client doesn't need to track them separately.
+
+If the source stops sending, `source_bitrate_bps` and `opus_bitrate_bps`
+(and therefore `egress_bitrate_bps`) all drop to `0` on the next report
+— a clear "nothing is coming in right now" signal, without having to go
+check the server log.
 
 ## 6. Reverse proxy mode (Nginx in front)
 
@@ -336,7 +384,7 @@ browser, paste a URL and a token (or leave the token empty if the server
 is running with `-noauth=true`), pick the channel count, and hit Start.
 Useful both as a quick manual test tool and as a reference implementation.
 
-### Protocol notes
+### Protocol notes (apply to both clients)
 
 Every binary message from the server has a 12-byte header
 (`seq` uint32 LE + `timestamp` uint64 LE) followed by the Opus packet — the

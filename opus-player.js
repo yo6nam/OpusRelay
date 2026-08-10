@@ -22,6 +22,7 @@ let opusDecoder  = null;
 let nextPlayTime = 0;
 let timestamp    = 0;
 let lastRttMs    = null;
+let lastStats    = null; // {opus_bitrate_bps, udp_bitrate_bps, listeners, channels, mode}
 
 const style = document.createElement('style');
 style.textContent = `
@@ -32,6 +33,24 @@ style.textContent = `
     }
 `;
 document.head.appendChild(style);
+
+function formatBps(bps) {
+    if (bps >= 1000000) return (bps / 1000000).toFixed(1) + 'Mbps';
+    if (bps >= 1000) return Math.round(bps / 1000) + 'kbps';
+    return bps + 'bps';
+}
+
+function connectedTooltip() {
+    const parts = [];
+    if (lastRttMs !== null) parts.push(`${lastRttMs}ms`);
+    if (lastStats) {
+        parts.push(`${formatBps(lastStats.opus_bitrate_bps)} opus`);
+        if (lastStats.savings_percent > 0) {
+            parts.push(`${Math.round(lastStats.savings_percent)}% saved`);
+        }
+    }
+    return parts.length ? `Connected — ${parts.join(' · ')}` : 'Connected';
+}
 
 function updateConnectionStatus(status) {
     const toggleBtn = document.getElementById('togglePlayer');
@@ -62,7 +81,7 @@ function updateConnectionStatus(status) {
         case 'connected':
             statusIndicator.style.backgroundColor = 'rgb(152, 255, 156)';
             statusIndicator.style.boxShadow = '0 0 6px #4caf50';
-            statusIndicator.title = lastRttMs !== null ? `Connected — ${lastRttMs}ms` : 'Connected';
+            statusIndicator.title = connectedTooltip();
             break;
         case 'disconnected':
             statusIndicator.style.backgroundColor = '#f44336';
@@ -224,6 +243,9 @@ function connectWebSocket() {
                 } else if (msg.type === 'latency') {
                     lastRttMs = Math.round(msg.rtt_ms);
                     updateConnectionStatus('connected');
+                } else if (msg.type === 'stats') {
+                    lastStats = msg;
+                    updateConnectionStatus('connected');
                 }
             } catch(e) {}
             return;
@@ -317,6 +339,7 @@ function stopPlayer() {
 
     nextPlayTime = 0;
     lastRttMs = null;
+    lastStats = null;
 
     updateConnectionStatus('disconnected');
 

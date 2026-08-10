@@ -113,6 +113,7 @@ type Config struct {
 	MaxClients         int    `json:"max_clients"`
 	NoAuth             bool   `json:"no_auth"`
 	UDPWaitWarnSec     int    `json:"udp_wait_warn_sec"`
+	StatsIntervalSec   int    `json:"stats_interval_sec"`
 }
 
 type JWTPayload struct {
@@ -172,6 +173,7 @@ func loadConfig(configPath string) (*Config, error) {
 		MaxClients:         500,
 		NoAuth:             false,
 		UDPWaitWarnSec:     10,
+		StatsIntervalSec:   2,
 	}
 
 	if configPath != "" {
@@ -212,6 +214,7 @@ func saveConfigTemplate(path string) error {
 		MaxClients:         500,
 		NoAuth:             false,
 		UDPWaitWarnSec:     10,
+		StatsIntervalSec:   2,
 	}
 
 	file, err := os.Create(path)
@@ -306,7 +309,7 @@ func (h *Hub) CloseAll() {
 	for _, c := range clients {
 		c.mu.Lock()
 		if !c.closed {
-			closeFrame := []byte{0x88, 0x02, 0x03, 0xE8}
+			closeFrame := []byte{0x88, 0x02, 0x03, 0xE8} // 1000 Normal Closure
 			c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 			c.conn.Write(closeFrame)
 			c.closed = true
@@ -664,6 +667,46 @@ func generateTone(pcm []int16, channels int, sampleRate int, frequency float64, 
 	}
 }
 
+type trafficStats struct {
+	udpBytes   int64
+	opusBytes  int64
+	lastReport time.Time
+}
+
+func (t *trafficStats) maybeReport(hub *Hub, cfg Config, now time.Time) {
+	if cfg.StatsIntervalSec <= 0 {
+		return
+	}
+	interval := time.Duration(cfg.StatsIntervalSec) * time.Second
+	elapsed := now.Sub(t.lastReport)
+	if elapsed < interval {
+		return
+	}
+	elapsedSec := elapsed.Seconds()
+
+	sourceBps := int64(float64(t.udpBytes*8) / elapsedSec)
+	opusBps := int64(float64(t.opusBytes*8) / elapsedSec)
+	listeners := hub.Count()
+	egressBps := opusBps * int64(listeners)
+
+	var savingsPercent float64
+	if sourceBps > 0 {
+		savingsPercent = (1 - float64(opusBps)/float64(sourceBps)) * 100
+		if savingsPercent < 0 {
+			savingsPercent = 0
+		}
+	}
+
+	msg := fmt.Sprintf(
+		`{"type":"stats","source_bitrate_bps":%d,"opus_bitrate_bps":%d,"egress_bitrate_bps":%d,"savings_percent":%.1f,"listeners":%d,"channels":%d,"mode":%q}`,
+		sourceBps, opusBps, egressBps, savingsPercent, listeners, cfg.Channels, cfg.Mode,
+	)
+	hub.BroadcastControl(msg)
+	t.opusBytes = 0
+	t.udpBytes = 0
+	t.lastReport = now
+}
+
 func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 	frameSamples := cfg.SampleRate * cfg.FrameMS / 1000
 	frameBytes := frameSamples * cfg.Channels * 2
@@ -673,6 +716,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 	var seq uint32 = 0
 	startTime := time.Now()
 	frameDuration := time.Duration(cfg.FrameMS) * time.Millisecond
+	stats := &trafficStats{lastReport: time.Now()}
 
 	if cfg.TestTone {
 		logger.Println("TEST TONE MODE ENABLED - Generating 440Hz sine wave")
@@ -712,6 +756,9 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 				hub.Broadcast(buf)
 				seq++
 			}
+
+			stats.opusBytes += int64(nOut)
+			stats.maybeReport(hub, cfg, time.Now())
 
 			if cfg.DebugJitter {
 				delay := time.Since(startLoop)
@@ -784,6 +831,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 						}
 					}
 				}
+				stats.maybeReport(hub, cfg, time.Now())
 				continue
 			}
 			logger.Printf("UDP read: %v", err)
@@ -803,6 +851,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 
 		lastPacketTime = time.Now()
 		gapCount = 0
+		stats.udpBytes += int64(n)
 
 		if len(accumulator)+n > maxAccumulatorBytes {
 			logger.Printf("Accumulator overflow (%d bytes) – resetting", len(accumulator))
@@ -837,7 +886,11 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 				hub.Broadcast(buf)
 				seq++
 			}
+
+			stats.opusBytes += int64(nOut)
 		}
+
+		stats.maybeReport(hub, cfg, time.Now())
 	}
 }
 
@@ -944,6 +997,7 @@ func main() {
 	flag.StringVar(&cfg.Mode, "mode", cfg.Mode, "Encoder profile: speech or music")
 	flag.IntVar(&cfg.MaxClients, "maxclients", cfg.MaxClients, "Max simultaneous WS clients (0 = unlimited)")
 	flag.IntVar(&cfg.UDPWaitWarnSec, "udpwaitwarn", cfg.UDPWaitWarnSec, "Seconds to wait for first UDP audio before logging a warning (0 = disabled)")
+	flag.IntVar(&cfg.StatsIntervalSec, "statsinterval", cfg.StatsIntervalSec, "Seconds between traffic-stats WS broadcasts (0 = disabled)")
 	flag.BoolVar(&cfg.TestTone, "testtone", cfg.TestTone, "Generate test tone instead of UDP input")
 	flag.BoolVar(&cfg.DebugJitter, "debugjitter", cfg.DebugJitter, "Log UDP gap diagnostics")
 	flag.BoolVar(&cfg.NoTLS, "notls", cfg.NoTLS, "Plain WS (behind reverse proxy)")

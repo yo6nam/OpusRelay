@@ -275,6 +275,10 @@
     <span id="latencyDisplay">⏱️ —</span>
   </div>
 
+  <div class="status-badge latency">
+    <span id="statsDisplay">🎵 —</span>
+  </div>
+
   <div id="peak-meter"></div>
   <div class="info-text">
     <span id="connectionInfo">not connected</span>
@@ -295,6 +299,7 @@
   const listenerInfo = document.getElementById('listenerInfo');
   const connInfo = document.getElementById('connectionInfo');
   const latencyDisplay = document.getElementById('latencyDisplay');
+  const statsDisplay = document.getElementById('statsDisplay');
 
   let isPlaying = false;
   let ws = null;
@@ -351,6 +356,30 @@
   function resetLatency() {
     if (latencyDisplay) {
       latencyDisplay.textContent = '⏱️ —';
+    }
+  }
+
+  function formatBps(bps) {
+    if (bps >= 1000000) return (bps / 1000000).toFixed(1) + 'Mbps';
+    if (bps >= 1000) return Math.round(bps / 1000) + 'kbps';
+    return bps + 'bps';
+  }
+
+  function updateStats(stats) {
+    if (!statsDisplay) return;
+    let text = `🎵 ${formatBps(stats.source_bitrate_bps)} source → ${formatBps(stats.opus_bitrate_bps)} opus`;
+    if (stats.savings_percent > 0) {
+      text += ` (${stats.savings_percent.toFixed(0)}%)`;
+    }
+    if (stats.listeners > 1) {
+      text += ` · ${formatBps(stats.egress_bitrate_bps)} total`;
+    }
+    statsDisplay.textContent = text;
+  }
+
+  function resetStats() {
+    if (statsDisplay) {
+      statsDisplay.textContent = '🎵 —';
     }
   }
 
@@ -462,6 +491,8 @@
             updateListenerCount(msg.count);
           } else if (msg.type === 'latency') {
             updateLatency(msg.rtt_ms);
+          } else if (msg.type === 'stats') {
+            updateStats(msg);
           }
         } catch(_) {}
         return;
@@ -582,6 +613,7 @@
     currentListenerCount = 0;
     updateListenerCount(0);
     resetLatency();
+    resetStats();
     toggleBtn.textContent = 'Stop';
     toggleBtn.className = 'btn btn-danger';
 
@@ -627,6 +659,7 @@
     currentListenerCount = 0;
     updateListenerCount(0);
     resetLatency();
+    resetStats();
 
     setStatus('disconnected', 'Stopped');
     updateConnInfo('idle');
@@ -651,6 +684,7 @@
     channelsSelect.value = '1';
     channelsSelect.disabled = false;
     resetLatency();
+    resetStats();
     setStatus('disconnected', 'Idle');
     updateConnInfo('reset');
     updateListenerCount(0);
@@ -675,6 +709,7 @@
   updateConnInfo('ready');
   updateListenerCount(0);
   resetLatency();
+  resetStats();
 
   const urlParams = new URLSearchParams(window.location.search);
   const tokenParam = urlParams.get('token');
