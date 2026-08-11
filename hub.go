@@ -53,6 +53,12 @@ func (h *Hub) CloseAll() {
 	}
 }
 
+// Broadcast sends the same audio packet to every connected client.
+// The underlying byte slice is shared (not copied) across all clients:
+// writeFrame only ever reads from it to build a new frame buffer, it
+// never mutates it in place, so sharing the reference is safe and avoids
+// one extra heap allocation + copy per client per packet (previously
+// clientCount allocations every ~20ms at streaming cadence).
 func (h *Hub) Broadcast(data []byte) {
 	h.mu.RLock()
 	clients := make([]*wsConn, 0, len(h.clients))
@@ -62,9 +68,7 @@ func (h *Hub) Broadcast(data []byte) {
 	h.mu.RUnlock()
 
 	for _, c := range clients {
-		pkt := make([]byte, len(data))
-		copy(pkt, data)
-		c.enqueue(pkt)
+		c.enqueue(data)
 	}
 }
 

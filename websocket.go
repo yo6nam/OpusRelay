@@ -23,6 +23,7 @@ const controlQueueDepth = 20
 type wsMessage struct {
 	data   []byte
 	isText bool
+	raw    bool // if true, data is already a complete WS frame — write as-is, don't re-wrap
 }
 
 type wsConn struct {
@@ -44,7 +45,6 @@ func upgradeWS(w http.ResponseWriter, r *http.Request, logger *log.Logger) (*wsC
 	if key == "" {
 		return nil, fmt.Errorf("missing Sec-WebSocket-Key")
 	}
-
 	h := sha1.New()
 	io.WriteString(h, key+wsGUID)
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
@@ -85,13 +85,12 @@ func (c *wsConn) writeLoop() {
 	defer ticker.Stop()
 
 	for {
-
 		select {
 		case msg, ok := <-c.controlQueue:
 			if !ok {
 				return
 			}
-			if err := c.writeFrame(msg.data, msg.isText); err != nil {
+			if err := c.writeMessage(msg); err != nil {
 				return
 			}
 			continue
@@ -103,7 +102,7 @@ func (c *wsConn) writeLoop() {
 			if !ok {
 				return
 			}
-			if err := c.writeFrame(msg.data, msg.isText); err != nil {
+			if err := c.writeMessage(msg); err != nil {
 				return
 			}
 		case msg, ok := <-c.sendQueue:
@@ -124,16 +123,29 @@ func (c *wsConn) writeLoop() {
 	}
 }
 
+// writeMessage dispatches a queued wsMessage to the wire. Raw messages
+// (already-framed WS frames, e.g. a Pong echo) are written verbatim;
+// everything else goes through writeFrame for normal framing.
+func (c *wsConn) writeMessage(msg wsMessage) error {
+	if msg.raw {
+		c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		_, err := c.conn.Write(msg.data)
+		return err
+	}
+	return c.writeFrame(msg.data, msg.isText)
+}
+
 func (c *wsConn) writeFrame(data []byte, isText bool, opcode ...byte) error {
 	var header [10]byte
 	switch {
 	case len(opcode) > 0:
-		header[0] = 0x80 | opcode[0] // FIN + explicit opcode (e.g. 0x9 = ping)
+		header[0] = 0x80 | opcode[0] // FIN + explicit opcode (e.g. 0x9 = ping, 0xA = pong)
 	case isText:
 		header[0] = 0x81
 	default:
 		header[0] = 0x82
 	}
+
 	n := len(data)
 	var hLen int
 	switch {
@@ -149,14 +161,20 @@ func (c *wsConn) writeFrame(data []byte, isText bool, opcode ...byte) error {
 		binary.BigEndian.PutUint64(header[2:], uint64(n))
 		hLen = 10
 	}
+
 	frame := make([]byte, hLen+n)
 	copy(frame, header[:hLen])
 	copy(frame[hLen:], data)
+
 	c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 	_, err := c.conn.Write(frame)
 	return err
 }
 
+// enqueue queues a binary audio frame. Non-blocking: if the queue is full,
+// the oldest pending frame is dropped to make room for the new one. If the
+// queue fills again before the new frame can be enqueued, the frame is
+// dropped entirely rather than blocking the caller (e.g. Hub.Broadcast).
 func (c *wsConn) enqueue(data []byte) bool {
 	c.mu.Lock()
 	if c.closed {
@@ -174,11 +192,17 @@ func (c *wsConn) enqueue(data []byte) bool {
 		case <-c.sendQueue:
 		default:
 		}
-		c.sendQueue <- msg
-		return true
+		select {
+		case c.sendQueue <- msg:
+			return true
+		default:
+			return false
+		}
 	}
 }
 
+// enqueueControl queues a text control frame (stats, latency, etc). Same
+// non-blocking drop-oldest semantics as enqueue.
 func (c *wsConn) enqueueControl(msg string) bool {
 	c.mu.Lock()
 	if c.closed {
@@ -196,8 +220,42 @@ func (c *wsConn) enqueueControl(msg string) bool {
 		case <-c.controlQueue:
 		default:
 		}
-		c.controlQueue <- m
+		select {
+		case c.controlQueue <- m:
+			return true
+		default:
+			return false
+		}
+	}
+}
+
+// enqueueRawControl queues a pre-built raw WebSocket frame (e.g. a Pong
+// reply) to be written to the wire as-is by writeLoop, bypassing writeFrame's
+// framing logic. This avoids double-wrapping frames that already carry a
+// WebSocket header.
+func (c *wsConn) enqueueRawControl(rawFrame []byte) bool {
+	c.mu.Lock()
+	if c.closed {
+		c.mu.Unlock()
+		return false
+	}
+	c.mu.Unlock()
+
+	m := wsMessage{data: rawFrame, isText: false, raw: true}
+	select {
+	case c.controlQueue <- m:
 		return true
+	default:
+		select {
+		case <-c.controlQueue:
+		default:
+		}
+		select {
+		case c.controlQueue <- m:
+			return true
+		default:
+			return false
+		}
 	}
 }
 
@@ -210,14 +268,21 @@ func (c *wsConn) readLoop() {
 		}
 		c.mu.Unlock()
 		close(c.done)
-		close(c.sendQueue)
-		close(c.controlQueue)
+		// NOTE: sendQueue and controlQueue are intentionally NOT closed here.
+		// Closing them here races with enqueue()/enqueueControl() running on
+		// other goroutines (e.g. Hub.Broadcast), which can send on a closed
+		// channel and panic. Once c.closed is true, enqueue/enqueueControl
+		// stop accepting new messages, and both channels are garbage
+		// collected once this wsConn is no longer referenced. writeLoop
+		// exits via <-c.done regardless.
 	}()
 
 	const idleTimeout = 90 * time.Second
 	buf := bufio.NewReaderSize(c.conn, 4096)
+
 	for {
 		c.conn.SetReadDeadline(time.Now().Add(idleTimeout))
+
 		b0, err := buf.ReadByte()
 		if err != nil {
 			return
@@ -226,6 +291,7 @@ func (c *wsConn) readLoop() {
 		if err != nil {
 			return
 		}
+
 		opcode := b0 & 0x0F
 		masked := (b1 & 0x80) != 0
 		payloadLen := int(b1 & 0x7F)
@@ -255,6 +321,7 @@ func (c *wsConn) readLoop() {
 				return
 			}
 		}
+
 		payload := make([]byte, payloadLen)
 		if payloadLen > 0 {
 			if _, err := io.ReadFull(buf, payload); err != nil {
@@ -274,8 +341,11 @@ func (c *wsConn) readLoop() {
 			c.conn.Write(closeFrame)
 			return
 		case 0x9:
+			// Build the raw Pong frame (header + echoed payload) and hand it
+			// to writeLoop via the raw-control path so writeFrame doesn't
+			// wrap it in a second WebSocket header.
 			pong := append([]byte{0x8A, byte(len(payload))}, payload...)
-			c.enqueue(pong)
+			c.enqueueRawControl(pong)
 		case 0xA:
 			sentAt := c.pingSentAt.Swap(0)
 			if sentAt != 0 {

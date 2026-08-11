@@ -138,7 +138,7 @@ opusrelay/
 │   └── demo.html             - standalone demo/test client (no host page needed)
 │   └── examples.html         - integration examples of the client
 │   └── js/
-│       └── opus-player.js   - embeddable client library
+│       └── opus-player.js    - embeddable client library
 ├── main.go                   - flag parsing, startup, graceful shutdown
 ├── config.go                 - Config struct, loadConfig, saveConfigTemplate
 ├── auth.go                   - JWTPayload, validateJWT, getJWTSecret

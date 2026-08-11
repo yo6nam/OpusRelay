@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "1.0.2"
+const version = "1.0.3"
 
 func main() {
 	preFlags := flag.NewFlagSet("pre", flag.ContinueOnError)
