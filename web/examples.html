@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpusRelay — Integration examples</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/php.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/xml.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; }
+  body {
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #0b1220;
+    color: #e2e8f0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    min-height: 100vh;
+    padding: 40px 16px;
+  }
+  h1 {
+    font-size: 1.35rem;
+    font-weight: 500;
+    color: #c8d6f0;
+    text-align: center;
+    margin-bottom: 20px;
+    letter-spacing: 0.2px;
+  }
+  .card {
+    width: 100%;
+    max-width: 720px;
+  }
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 2px;
+  }
+  .tab {
+    background: #17233d;
+    color: #8ca3c9;
+    border: none;
+    padding: 10px 18px;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    border-radius: 8px 8px 0 0;
+    transition: 0.15s;
+  }
+  .tab:hover { background: #1d2c4a; color: #c8d6f0; }
+  .tab.active {
+    background: #111a2e;
+    color: #f0f4ff;
+  }
+  .code-panel {
+    background: #111a2e;
+    border: 1px solid #1f2b47;
+    border-radius: 0 12px 12px 12px;
+    overflow: hidden;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.6);
+    position: relative;
+  }
+  .code-panel pre {
+    margin: 0;
+    padding: 20px;
+    max-height: 460px;
+    overflow: auto;
+  }
+  .code-panel code {
+    font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    background: transparent !important;
+  }
+  .copy-btn {
+    position: absolute;
+    top: 12px;
+    right: 12px;
+    background: #1f2b47;
+    color: #b0c4e8;
+    border: 1px solid #2d3b5e;
+    border-radius: 6px;
+    padding: 5px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    transition: 0.15s;
+  }
+  .copy-btn:hover { background: #26365a; }
+  .footer-note {
+    max-width: 720px;
+    width: 100%;
+    text-align: center;
+    color: #6a7fa0;
+    font-size: 13px;
+    margin-top: 20px;
+    line-height: 1.6;
+  }
+  .footer-note code {
+    background: #17233d;
+    padding: 2px 6px;
+    border-radius: 4px;
+    color: #a9c1f5;
+    font-size: 12px;
+  }
+
+  @media (max-width: 480px) {
+    body { padding: 24px 10px; }
+    h1 { font-size: 1.1rem; margin-bottom: 16px; }
+    .tab { padding: 8px 12px; font-size: 12px; }
+    .code-panel pre { padding: 14px; max-height: 360px; }
+    .code-panel code { font-size: 12px; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Integrate the OpusRelay client into your app:</h1>
+
+<div class="card">
+  <div class="tabs" id="tabs"></div>
+  <div class="code-panel">
+    <button class="copy-btn" id="copyBtn">Copy</button>
+    <pre><code id="codeBlock" class="language-html"></code></pre>
+  </div>
+</div>
+
+<div class="footer-note" id="footerNote">
+  Start the OpusRelay server, then open the page — <code>opus-player.js</code>
+  must be served at the path used in the example above.
+</div>
+
+<script>
+(function() {
+  const examples = {
+    html: {
+      label: 'HTML',
+      lang: 'xml',
+      note: 'Start the OpusRelay server, then open the page — <code>opus-player.js</code> must be served at the path used above.',
+      code:
+`<button id="togglePlayer" class="btn btn-success">Monitor OFF</button>
+
+<script>
+  window.AUDIO_SOCKET_URL = "wss://domain.tld:8080/";
+  window.AUDIO_TOKEN      = "";
+  window.AUDIO_CHANNELS   = 1;
+<\/script>
+<script src="js/opus-player.js"><\/script>`
+    },
+
+    php: {
+      label: 'PHP',
+      lang: 'php',
+      note: 'The token can be generated per request (e.g. per authenticated user) instead of being hardcoded.',
+      code:
+`<?php
+// player.php — token generated per request, not hardcoded
+$token = getListenerToken($_SESSION['user_id'] ?? null);
+?>
+<button id="togglePlayer" class="btn btn-success">Monitor OFF</button>
+
+<script>
+  window.AUDIO_SOCKET_URL = "wss://domain.tld:8080/";
+  window.AUDIO_TOKEN      = "<?= htmlspecialchars($token, ENT_QUOTES) ?>";
+  window.AUDIO_CHANNELS   = 1;
+<\/script>
+<script src="/js/opus-player.js"><\/script>`
+    },
+
+    wordpress: {
+      label: 'WordPress',
+      lang: 'php',
+      note: 'Add this to <code>functions.php</code>, then use <code>[opusrelay_player channels="2"]</code> in a post/page.',
+      code:
+`// functions.php
+function opusrelay_player_shortcode($atts) {
+    $atts = shortcode_atts([
+        'channels' => 1,
+        'token'    => '',
+    ], $atts);
+
+    wp_enqueue_script(
+        'opus-player',
+        get_template_directory_uri() . '/js/opus-player.js',
+        [], null, true
+    );
+
+    ob_start(); ?>
+    <button id="togglePlayer" class="btn btn-success">Monitor OFF</button>
+    <script>
+      window.AUDIO_SOCKET_URL = "wss://domain.tld:8080/";
+      window.AUDIO_TOKEN      = "<?php echo esc_js($atts['token']); ?>";
+      window.AUDIO_CHANNELS   = <?php echo (int) $atts['channels']; ?>;
+    <\/script>
+    <?php
+    return ob_get_clean();
+}
+add_shortcode('opusrelay_player', 'opusrelay_player_shortcode');`
+    },
+
+    react: {
+      label: 'React',
+      lang: 'javascript',
+      note: 'The button must be rendered before <code>opus-player.js</code> runs — that\'s why the script is injected in <code>useEffect</code>, after the first render.',
+      code:
+`import { useEffect, useRef } from 'react';
+
+export default function OpusPlayerWidget() {
+  const loaded = useRef(false);
+
+  useEffect(() => {
+    if (loaded.current) return;
+    loaded.current = true;
+
+    window.AUDIO_SOCKET_URL = 'wss://domain.tld:8080/';
+    window.AUDIO_TOKEN      = '';
+    window.AUDIO_CHANNELS   = 1;
+
+    const script = document.createElement('script');
+    script.src = '/js/opus-player.js';
+    document.body.appendChild(script);
+
+    return () => document.body.removeChild(script);
+  }, []);
+
+  return (
+    <button id="togglePlayer" className="btn btn-success">
+      Monitor OFF
+    </button>
+  );
+}`
+    },
+
+    vue: {
+      label: 'Vue',
+      lang: 'xml',
+      note: 'Same idea as React: the script loads in <code>onMounted</code>, after the button already exists in the DOM.',
+      code:
+`<template>
+  <button id="togglePlayer" class="btn btn-success">Monitor OFF</button>
+</template>
+
+<script setup>
+import { onMounted } from 'vue';
+
+onMounted(() => {
+  window.AUDIO_SOCKET_URL = 'wss://domain.tld:8080/';
+  window.AUDIO_TOKEN      = '';
+  window.AUDIO_CHANNELS   = 1;
+
+  const script = document.createElement('script');
+  script.src = '/js/opus-player.js';
+  document.body.appendChild(script);
+});
+<\/script>`
+    },
+
+    js: {
+      label: 'JavaScript',
+      lang: 'javascript',
+      note: 'Useful in SPAs or plugins where there\'s no static HTML file — build the button from code and inject the script dynamically.',
+      code:
+`function initOpusPlayer(container, opts = {}) {
+  window.AUDIO_SOCKET_URL = opts.socketUrl || 'wss://domain.tld:8080/';
+  window.AUDIO_TOKEN      = opts.token || '';
+  window.AUDIO_CHANNELS   = opts.channels || 1;
+
+  const btn = document.createElement('button');
+  btn.id = 'togglePlayer';
+  btn.className = 'btn btn-success';
+  btn.textContent = 'Monitor OFF';
+  container.appendChild(btn);
+
+  const script = document.createElement('script');
+  script.src = '/js/opus-player.js';
+  document.body.appendChild(script);
+}
+
+// usage:
+initOpusPlayer(document.getElementById('player-container'), {
+  channels: 2
+});`
+    }
+  };
+
+  const tabsEl = document.getElementById('tabs');
+  const codeEl = document.getElementById('codeBlock');
+  const noteEl = document.getElementById('footerNote');
+  const copyBtn = document.getElementById('copyBtn');
+
+  Object.keys(examples).forEach((key, i) => {
+    const btn = document.createElement('button');
+    btn.className = 'tab' + (i === 0 ? ' active' : '');
+    btn.textContent = examples[key].label;
+    btn.dataset.key = key;
+    btn.addEventListener('click', () => selectTab(key));
+    tabsEl.appendChild(btn);
+  });
+
+  function selectTab(key) {
+    const ex = examples[key];
+
+    [...tabsEl.children].forEach(t => {
+      t.classList.toggle('active', t.dataset.key === key);
+    });
+
+    codeEl.className = 'language-' + ex.lang;
+    codeEl.textContent = ex.code;
+    delete codeEl.dataset.highlighted;
+    hljs.highlightElement(codeEl);
+
+    noteEl.innerHTML = ex.note;
+  }
+
+  copyBtn.addEventListener('click', () => {
+    navigator.clipboard.writeText(codeEl.textContent).then(() => {
+      copyBtn.textContent = 'Copied!';
+      setTimeout(() => { copyBtn.textContent = 'Copy'; }, 1500);
+    });
+  });
+
+  selectTab('html');
+})();
+</script>
+</body>
+</html>

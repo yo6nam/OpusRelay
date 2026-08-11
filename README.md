@@ -12,8 +12,7 @@ client.
 > other generic audio sources, making it a versatile tool for live audio
 > streaming.
 
-
-**[Live demo](https://yo6nam.github.io/OpusRelay/web/example.html)**
+**[Live demo](https://yo6nam.github.io/OpusRelay/web/demo.html)**
 
 ## Why zero external dependencies?
 
@@ -375,7 +374,9 @@ loaded. Configure it via globals set **before** the script tag:
 <script src="web/js/opus-player.js"></script>
 ```
 
-### `web/example.html` — standalone demo/test client
+**[Integration exemples](https://yo6nam.github.io/OpusRelay/web/examples.html)**
+
+### `web/demo.html` — standalone demo/test client
 
 A self-contained page with its own UI — WebSocket URL and token as editable
 input fields, a Channels dropdown (Mono/Stereo — must match the server's

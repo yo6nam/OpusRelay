@@ -17,7 +17,6 @@ let ws           = null;
 let audioCtx     = null;
 let isPlaying    = false;
 let gainNode     = null;
-let peakMeter    = null;
 let opusDecoder  = null;
 let nextPlayTime = 0;
 let timestamp    = 0;
@@ -115,8 +114,6 @@ document.getElementById('togglePlayer').addEventListener('click', function () {
 async function startPlayer() {
     if (isPlaying) return;
 
-    $('#peak-meter').slideDown();
-
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: SAMPLE_RATE,
         latencyHint: 'playback'
@@ -129,29 +126,6 @@ async function startPlayer() {
     gainNode = audioCtx.createGain();
     gainNode.gain.value = 1.0;
     gainNode.connect(audioCtx.destination);
-
-    if (typeof webAudioPeakMeter !== 'undefined') {
-        try {
-            const PeakMeterClass = webAudioPeakMeter.WebAudioPeakMeter;
-            if (PeakMeterClass) {
-                peakMeter = new PeakMeterClass(gainNode, document.getElementById('peak-meter'), {
-                    backgroundColor: 'rgba(2, 50, 98, 0.77)',
-                    borderSize: 2,
-                    tickColor: '#ddd',
-                    labelColor: '#ddd',
-                    gradient: ['red 1%', '#ff0 16%', 'lime 45%', '#080 100%'],
-                    dbRangeMin: -42,
-                    dbRangeMax: 0,
-                    dbTickSize: 6,
-                    vertical: false,
-                    fontSize: 9,
-                    maskTransition: '0.05s',
-                    audioMeterStandard: 'peak-sample',
-                    peakHoldDuration: 1200
-                });
-            }
-        } catch (e) {}
-    }
 
     if (!('AudioDecoder' in window)) {
         alert('Your browser does not support WebCodecs.');
@@ -201,7 +175,6 @@ function initDecoder() {
             nextPlayTime += ab.duration;
         },
         error: (e) => {
-            console.warn('AudioDecoder error:', e);
             if (isPlaying) initDecoder();
         }
     });
@@ -224,7 +197,6 @@ function connectWebSocket() {
     ws.binaryType = 'arraybuffer';
 
     ws.onopen = () => {
-        console.log('✅ WebSocket connected');
         updateConnectionStatus('connected');
     };
 
@@ -268,13 +240,10 @@ function connectWebSocket() {
     };
 
     ws.onerror = (e) => {
-        console.error('WebSocket error:', e);
         updateConnectionStatus('disconnected');
     };
 
     ws.onclose = (e) => {
-        console.log('WebSocket closed:', e.code, e.reason);
-        
         if (!isPlaying) {
             updateConnectionStatus('disconnected');
             return;
@@ -343,10 +312,4 @@ function stopPlayer() {
 
     updateConnectionStatus('disconnected');
 
-    $('#peak-meter').slideUp(function() {
-        if (peakMeter) {
-            try { peakMeter.cleanup(); } catch(e) {}
-            peakMeter = null;
-        }
-    });
 }
