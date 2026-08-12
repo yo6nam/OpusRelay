@@ -127,7 +127,10 @@
 
 <div class="footer-note" id="footerNote">
   Start the OpusRelay server, then open the page — <code>opus-player.js</code>
-  must be served at the path used in the example above.
+  must be served at the path used in the example above. On browsers without
+  native WebCodecs support (e.g. older Windows builds), it automatically
+  loads a WASM-based compatibility polyfill the first time playback starts —
+  see the README for details and how to self-host it offline.
 </div>
 
 <script>
@@ -136,7 +139,7 @@
     html: {
       label: 'HTML',
       lang: 'xml',
-      note: 'Start the OpusRelay server, then open the page — <code>opus-player.js</code> must be served at the path used above.',
+      note: 'Start the OpusRelay server, then open the page — <code>opus-player.js</code> must be served at the path used above. On browsers without native WebCodecs, it auto-loads a WASM polyfill on first playback — see the README.',
       code:
 `<button id="togglePlayer" class="btn btn-success">Monitor OFF</button>
 
@@ -144,6 +147,9 @@
   window.AUDIO_SOCKET_URL = "wss://domain.tld:8080/";
   window.AUDIO_TOKEN      = "";
   window.AUDIO_CHANNELS   = 1;
+  // Optional: opus-player.js auto-loads a WebCodecs polyfill for browsers
+  // without native AudioDecoder support. Set to false to disable it.
+  // window.AUDIO_ENABLE_POLYFILL = false;
 <\/script>
 <script src="js/opus-player.js"><\/script>`
     },

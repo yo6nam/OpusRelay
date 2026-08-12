@@ -13,6 +13,24 @@ const CHANNELS       = (typeof window.AUDIO_CHANNELS !== 'undefined' && window.A
     : 1;
 const FRAME_DURATION = 0.02;
 
+// WebCodecs (AudioDecoder) compatibility layer for browsers/OSes that
+// don't ship it natively (e.g. older Windows builds still on outdated
+// Chromium-based browsers). Only ever downloaded lazily, the first time
+// startPlayer() runs on a client where 'AudioDecoder' is missing — modern
+// browsers never pay this extra request. Both can be overridden from the
+// host page, before this script is loaded:
+//   window.AUDIO_ENABLE_POLYFILL = false;               // opt out entirely
+//   window.AUDIO_POLYFILL_URL    = '/vendor/polyfill.js'; // self-hosted copy
+const ENABLE_POLYFILL = (typeof window.AUDIO_ENABLE_POLYFILL !== 'undefined')
+    ? !!window.AUDIO_ENABLE_POLYFILL
+    : true;
+const POLYFILL_URL = (typeof window.AUDIO_POLYFILL_URL !== 'undefined' && window.AUDIO_POLYFILL_URL)
+    ? window.AUDIO_POLYFILL_URL
+    : 'https://cdn.jsdelivr.net/npm/libavjs-webcodecs-polyfill@0.0.3/dist/libavjs-webcodecs-polyfill.min.js';
+
+let polyfillLoaded  = false;
+let polyfillLoading = false;
+
 let ws           = null;
 let audioCtx     = null;
 let isPlaying    = false;
@@ -49,6 +67,70 @@ function connectedTooltip() {
         }
     }
     return parts.length ? `Connected — ${parts.join(' · ')}` : 'Connected';
+}
+
+// Resolves once AudioDecoder is usable — either natively, or (if enabled)
+// after loading the WASM-based libavjs-webcodecs-polyfill fallback.
+// Rejects only if AudioDecoder is unavailable AND the polyfill is either
+// disabled or fails to load/init.
+function ensurePolyfillLoaded() {
+    return new Promise((resolve, reject) => {
+        if ('AudioDecoder' in window) {
+            resolve();
+            return;
+        }
+
+        if (!ENABLE_POLYFILL) {
+            reject(new Error('AudioDecoder not supported and polyfill is disabled'));
+            return;
+        }
+
+        if (polyfillLoaded) {
+            resolve();
+            return;
+        }
+
+        if (polyfillLoading) {
+            const check = setInterval(() => {
+                if (polyfillLoaded) {
+                    clearInterval(check);
+                    resolve();
+                }
+            }, 200);
+            return;
+        }
+
+        polyfillLoading = true;
+
+        const script = document.createElement('script');
+        script.src = POLYFILL_URL;
+        script.crossOrigin = 'anonymous';
+
+        script.onload = () => {
+            if (typeof LibAVWebCodecs === 'undefined') {
+                polyfillLoading = false;
+                reject(new Error('LibAVWebCodecs not found after loading ' + POLYFILL_URL));
+                return;
+            }
+            LibAVWebCodecs.load({ polyfill: true })
+                .then(() => {
+                    polyfillLoaded = true;
+                    polyfillLoading = false;
+                    resolve();
+                })
+                .catch((err) => {
+                    polyfillLoading = false;
+                    reject(new Error('Polyfill init failed: ' + err.message));
+                });
+        };
+
+        script.onerror = () => {
+            polyfillLoading = false;
+            reject(new Error('Failed to load polyfill script from ' + POLYFILL_URL));
+        };
+
+        document.head.appendChild(script);
+    });
 }
 
 function updateConnectionStatus(status) {
@@ -114,6 +196,21 @@ document.getElementById('togglePlayer').addEventListener('click', function () {
 async function startPlayer() {
     if (isPlaying) return;
 
+    updateConnectionStatus('connecting'); // reused as a lightweight "please wait" indicator while the polyfill loads
+    try {
+        await ensurePolyfillLoaded();
+    } catch (err) {
+        updateConnectionStatus('disconnected');
+        alert('Your browser does not support WebCodecs (AudioDecoder) and the compatibility layer could not be loaded.\n\n' + err.message);
+        return;
+    }
+
+    if (!('AudioDecoder' in window)) {
+        updateConnectionStatus('disconnected');
+        alert('Your browser does not support WebCodecs, even with the compatibility layer.');
+        return;
+    }
+
     audioCtx = new (window.AudioContext || window.webkitAudioContext)({
         sampleRate: SAMPLE_RATE,
         latencyHint: 'playback'
@@ -126,11 +223,6 @@ async function startPlayer() {
     gainNode = audioCtx.createGain();
     gainNode.gain.value = 1.0;
     gainNode.connect(audioCtx.destination);
-
-    if (!('AudioDecoder' in window)) {
-        alert('Your browser does not support WebCodecs.');
-        return;
-    }
 
     nextPlayTime = 0;
     timestamp    = 0;
@@ -179,11 +271,15 @@ function initDecoder() {
         }
     });
 
-    opusDecoder.configure({
-        codec:            'opus',
-        sampleRate:       SAMPLE_RATE,
-        numberOfChannels: CHANNELS,
-    });
+    try {
+        opusDecoder.configure({
+            codec:            'opus',
+            sampleRate:       SAMPLE_RATE,
+            numberOfChannels: CHANNELS,
+        });
+    } catch (e) {
+        console.warn('Decoder config error:', e);
+    }
 }
 
 function connectWebSocket() {

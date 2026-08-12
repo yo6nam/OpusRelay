@@ -371,6 +371,8 @@ loaded. Configure it via globals set **before** the script tag:
   window.AUDIO_SOCKET_URL = "wss://your-host:8080/"; // defaults to wss://example.net:8080/ if unset
   window.AUDIO_TOKEN      = "eyJhbGciOi...";
   window.AUDIO_CHANNELS   = 2; // defaults to 1 (mono) if unset - must match the server's -channels flag
+  window.AUDIO_ENABLE_POLYFILL = true;  // optional, defaults to true - see "WebCodecs compatibility polyfill" below
+  window.AUDIO_POLYFILL_URL    = "...";  // optional, defaults to a jsDelivr CDN URL - see below
 </script>
 <script src="web/js/opus-player.js"></script>
 ```
@@ -387,6 +389,46 @@ browser, paste a URL and a token (or leave the token empty if the server
 is running with `-noauth`), pick the channel count, and hit Start.
 Useful both as a quick manual test tool and as a reference implementation.
 
+### WebCodecs compatibility polyfill (older browsers / OSes)
+
+[#webcodecs-compatibility-polyfill-older-browsers--oses](#webcodecs-compatibility-polyfill-older-browsers--oses)
+
+Both clients need `AudioDecoder` (part of the WebCodecs API) to decode the
+Opus stream. Most current browsers ship it natively, but some environments
+don't - notably older Windows builds still running an outdated
+Chromium-based browser. For those, both `opus-player.js` and `demo.html`
+automatically fall back to
+[`libavjs-webcodecs-polyfill`](https://github.com/ennuicastr/libavjs-webcodecs-polyfill),
+a WASM-based software implementation of `AudioDecoder`.
+
+How it works:
+
+- On `Start`/`Monitor ON`, the client checks whether `AudioDecoder` already
+  exists natively. If it does, nothing else happens - **no extra download,
+  no behavior change** for modern browsers.
+- If it's missing, the client injects a `<script>` tag pointing at the
+  polyfill (by default a jsDelivr CDN URL), waits for it to load and
+  initialize, then proceeds exactly as if `AudioDecoder` had been native.
+- If the polyfill script fails to load or fails to initialize, the client
+  shows an alert explaining that WebCodecs isn't available and the
+  compatibility layer couldn't be loaded, instead of failing silently.
+
+Configuration (set these globals before `opus-player.js` loads; `demo.html`
+has no globals - edit the `POLYFILL_URL` constant near the top of its
+`<script>` block directly if you need to change it):
+
+| Global                         | Default                                                                                          | Purpose                                                                 |
+| ------------------------------ | ------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| `window.AUDIO_ENABLE_POLYFILL` | `true`                                                                                             | Set to `false` to disable the fallback entirely - unsupported browsers get the old "not supported" alert instead of attempting to load anything. |
+| `window.AUDIO_POLYFILL_URL`    | `https://cdn.jsdelivr.net/npm/libavjs-webcodecs-polyfill@0.0.3/dist/libavjs-webcodecs-polyfill.min.js` | Point this at a self-hosted copy of the polyfill for offline/air-gapped deployments, or to pin a different version. |
+
+> The polyfill is pulled from a third-party CDN by default. For any
+> deployment without outbound internet access from the client (or where you
+> simply don't want to depend on jsDelivr), download the file from the
+> [project's releases](https://github.com/ennuicastr/libavjs-webcodecs-polyfill)
+> and serve it yourself, then point `AUDIO_POLYFILL_URL` (or `demo.html`'s
+> `POLYFILL_URL` constant) at that local path.
+
 ### Protocol notes (apply to both clients)
 
 Every binary message from the server has a 12-byte header
@@ -396,8 +438,10 @@ client must strip those 12 bytes before handing the data to the decoder
 
 Safari doesn't have working `AudioDecoder`/Opus support via WebCodecs as of
 this README - on Safari both clients show an error instead of starting
-playback. Safari support would need a separate fallback (e.g. a WASM-based
-`opus-stream-decoder`), which isn't included here.
+playback. The same WASM polyfill described above may help there too, since
+it's a software decoder independent of Safari's native WebCodecs support,
+but this hasn't been extensively tested against Safari specifically -
+treat it as best-effort rather than a guaranteed fix.
 
 ---
 
@@ -454,6 +498,7 @@ straight into `demo.html`'s token field for a quick manual test.
 
 This project uses the following open-source component in its frontend web clients:
 * [web-audio-peak-meter](https://github.com/esonderegger/web-audio-peak-meter) by Evan Sonderegger (MIT License) - providing the UI audio level meters.
+* [libavjs-webcodecs-polyfill](https://github.com/ennuicastr/libavjs-webcodecs-polyfill) (LGPL 2.1) - providing the WASM-based `AudioDecoder` fallback for browsers without native WebCodecs support.
 
 ## Development notes
 
