@@ -25,7 +25,7 @@ func securityMiddleware(next http.Handler) http.Handler {
 // config file, not remote/user input — so this isn't attacker-controlled
 // path traversal (gosec G304).
 func makeLogger(path string) *log.Logger {
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // 0600: log lines can contain client IPs/emails, no need for group/world read (gosec G302)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600) // #nosec G304 -- operator-supplied path via CLI/config; 0600: log lines can contain client IPs/emails, no need for group/world read (gosec G302)
 	if err != nil {
 		log.Fatalf("Log file: %v", err)
 	}

@@ -320,7 +320,11 @@ func (c *wsConn) readLoop() {
 			if _, err := io.ReadFull(buf, ext[:]); err != nil {
 				return
 			}
-			payloadLen = int(binary.BigEndian.Uint64(ext[:]))
+			rawLen := binary.BigEndian.Uint64(ext[:])
+			if rawLen > 65536 { // reject before the int conversion below
+				return
+			}
+			payloadLen = int(rawLen)
 		}
 
 		if payloadLen > 65536 {
@@ -358,6 +362,10 @@ func (c *wsConn) readLoop() {
 			// Build the raw Pong frame (header + echoed payload) and hand it
 			// to writeLoop via the raw-control path so writeFrame doesn't
 			// wrap it in a second WebSocket header.
+			if len(payload) > 125 { // RFC 6455 limit for control frames
+				return
+			}
+			// #nosec G115 -- payload length validated <= 125 bytes above
 			pong := append([]byte{0x8A, byte(len(payload))}, payload...)
 			c.enqueueRawControl(pong)
 		case 0xA:

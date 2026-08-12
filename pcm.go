@@ -106,6 +106,9 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 
 			if hub.Count() > 0 {
 				ts := time.Since(startTime).Microseconds()
+				if ts < 0 {
+					ts = 0
+				}
 				buf := make([]byte, 12+nOut)
 				binary.LittleEndian.PutUint32(buf[0:4], seq)
 				binary.LittleEndian.PutUint64(buf[4:12], uint64(ts))
@@ -222,6 +225,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 			frame := accumulator[:frameBytes]
 
 			for i := range pcm16 {
+				// #nosec G115 -- safe bit pattern reinterpretation from LE bytes to signed 16-bit PCM sample
 				pcm16[i] = int16(binary.LittleEndian.Uint16(frame[i*2:]))
 			}
 
@@ -234,6 +238,9 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 
 			if hub.Count() > 0 {
 				ts := time.Since(startTime).Microseconds()
+				if ts < 0 {
+					ts = 0
+				}
 
 				buf := make([]byte, 12+nOut)
 				binary.LittleEndian.PutUint32(buf[0:4], seq)
