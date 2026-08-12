@@ -273,12 +273,7 @@ func (c *wsConn) enqueueRawControl(rawFrame []byte) bool {
 
 func (c *wsConn) readLoop() {
 	defer func() {
-		c.mu.Lock()
-		if !c.closed {
-			c.closed = true
-			c.conn.Close()
-		}
-		c.mu.Unlock()
+		c.close()
 		close(c.done)
 		// NOTE: sendQueue and controlQueue are intentionally NOT closed here.
 		// Closing them here races with enqueue()/enqueueControl() running on
@@ -378,6 +373,11 @@ func (c *wsConn) Wait() {
 	<-c.done
 }
 
+// close marks the connection closed and closes the underlying socket.
+// Used by readLoop when the connection ends on its own (client disconnect,
+// read error, idle timeout). Hub.CloseAll does its own equivalent sequence
+// instead of calling this, because it needs to send a close frame *before*
+// closing the socket — this method only closes.
 func (c *wsConn) close() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
