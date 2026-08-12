@@ -30,13 +30,19 @@ func makeLogger(path string) *log.Logger {
 
 func wsHandler(cfg Config, hub *Hub, logger *log.Logger) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if cfg.MaxClients > 0 && hub.Count() >= cfg.MaxClients {
+			logger.Printf("Rejected %s: max clients (%d) reached", r.RemoteAddr, cfg.MaxClients)
+			http.Error(w, "server full", http.StatusServiceUnavailable)
+			return
+		}
+
 		var identity string
 
 		if cfg.NoAuth {
 			identity = "anonymous (auth disabled)"
 		} else {
 			token := r.URL.Query().Get("token")
-			payload, err := validateJWT(token, cfg.JWTSecretPath)
+			payload, err := validateJWT(token, cfg.JWTSecret)
 			if err != nil {
 				logger.Printf("Auth FAILED from %s: %v", r.RemoteAddr, err)
 				http.Error(w, "unauthorized: invalid or expired token", http.StatusUnauthorized)
@@ -46,12 +52,6 @@ func wsHandler(cfg Config, hub *Hub, logger *log.Logger) http.HandlerFunc {
 		}
 
 		logger.Printf("Client authenticated: %s from %s", identity, r.RemoteAddr)
-
-		if cfg.MaxClients > 0 && hub.Count() >= cfg.MaxClients {
-			logger.Printf("Rejected %s: max clients (%d) reached", r.RemoteAddr, cfg.MaxClients)
-			http.Error(w, "server full", http.StatusServiceUnavailable)
-			return
-		}
 
 		ws, err := upgradeWS(w, r, logger)
 		if err != nil {

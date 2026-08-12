@@ -26,14 +26,12 @@ func getJWTSecret(secretFile string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-func validateJWT(tokenString string, secretPath string) (*JWTPayload, error) {
+func validateJWT(tokenString string, secret string) (*JWTPayload, error) {
 	if tokenString == "" {
 		return nil, fmt.Errorf("empty token")
 	}
-
-	secret, err := getJWTSecret(secretPath)
-	if err != nil {
-		return nil, err
+	if secret == "" {
+		return nil, fmt.Errorf("no JWT secret loaded")
 	}
 
 	parts := strings.Split(tokenString, ".")

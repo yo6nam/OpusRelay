@@ -37,6 +37,15 @@ let isPlaying    = false;
 let gainNode     = null;
 let opusDecoder  = null;
 let nextPlayTime = 0;
+// AudioBufferSourceNodes scheduled via src.start() but not yet confirmed
+// finished. Per the Web Audio spec, a source node isn't eligible for GC
+// until it has actually played to completion. If audioCtx.currentTime
+// stops advancing for a long stretch (e.g. some browsers throttle/suspend
+// audio processing in a minimized/backgrounded tab) while WS frames keep
+// arriving, nodes would otherwise pile up here forever. See
+// resetPlaybackClock() below, which actively stops stale ones instead of
+// just abandoning the reference.
+let pendingSources = [];
 let timestamp    = 0;
 let lastRttMs    = null;
 let lastStats    = null; // {opus_bitrate_bps, udp_bitrate_bps, listeners, channels, mode}
@@ -133,6 +142,20 @@ function ensurePolyfillLoaded() {
     });
 }
 
+// Stops and drops references to every AudioBufferSourceNode scheduled
+// via src.start() that hasn't already finished playing, then resets the
+// playback clock. Used on every timeline discontinuity (startup, a
+// silence/talker gap, reconnect, or normal drift correction) so stale
+// nodes never accumulate — see the pendingSources comment above.
+function resetPlaybackClock(atTime) {
+    for (const p of pendingSources) {
+        try { p.src.stop(0); } catch (e) {}
+        try { p.src.disconnect(); } catch (e) {}
+    }
+    pendingSources = [];
+    nextPlayTime = atTime;
+}
+
 function updateConnectionStatus(status) {
     const toggleBtn = document.getElementById('togglePlayer');
     let statusIndicator = document.getElementById('ws-status-indicator');
@@ -224,7 +247,7 @@ async function startPlayer() {
     gainNode.gain.value = 1.0;
     gainNode.connect(audioCtx.destination);
 
-    nextPlayTime = 0;
+    resetPlaybackClock(0);
     timestamp    = 0;
     isPlaying    = true;
 
@@ -257,14 +280,27 @@ function initDecoder() {
             const now = audioCtx.currentTime;
 
             if (nextPlayTime < now || nextPlayTime - now > 0.3) {
-                nextPlayTime = now + 0.10;
+                // Discontinuity: either we fell behind (gap/reconnect) or
+                // drifted too far ahead. In the drift case specifically,
+                // previously scheduled nodes may never actually reach
+                // their start time (see pendingSources comment) — stop
+                // them explicitly rather than just moving nextPlayTime.
+                resetPlaybackClock(now + 0.10);
             }
 
             const src = audioCtx.createBufferSource();
             src.buffer = ab;
             src.connect(gainNode);
             src.start(nextPlayTime);
+            const startAt = nextPlayTime;
             nextPlayTime += ab.duration;
+            pendingSources.push({ src, endAt: startAt + ab.duration });
+
+            // Opportunistic cleanup during normal playback so the array
+            // doesn't grow unbounded between discontinuities either.
+            if (pendingSources.length > 64) {
+                pendingSources = pendingSources.filter(p => p.endAt > now);
+            }
         },
         error: (e) => {
             if (isPlaying) initDecoder();
@@ -303,9 +339,9 @@ function connectWebSocket() {
             try {
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'talker_start') {
-                    nextPlayTime = 0;
+                    resetPlaybackClock(0);
                 } else if (msg.type === 'talker_stop') {
-                    nextPlayTime = 0;
+                    resetPlaybackClock(0);
                 } else if (msg.type === 'client_count') {
                     updateListenerCount(msg.count);
                 } else if (msg.type === 'latency') {
@@ -352,7 +388,7 @@ function connectWebSocket() {
             return;
         }
         
-        nextPlayTime = 0;
+        resetPlaybackClock(0);
         timestamp    = 0;
 
         updateConnectionStatus('reconnecting');
@@ -402,6 +438,7 @@ function stopPlayer() {
         audioCtx = null;
     }
 
+    pendingSources = [];
     nextPlayTime = 0;
     lastRttMs = null;
     lastStats = null;

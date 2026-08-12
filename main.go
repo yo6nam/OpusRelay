@@ -14,7 +14,7 @@ import (
 	"time"
 )
 
-const version = "1.0.3"
+const version = "1.0.4"
 
 func main() {
 	preFlags := flag.NewFlagSet("pre", flag.ContinueOnError)
@@ -96,9 +96,18 @@ func main() {
 		logger.Println("######################################################")
 		logger.Println("# WARNING: AUTHENTICATION IS DISABLED (-noauth=true) #")
 		logger.Println("######################################################")
-	} else if _, err := getJWTSecret(cfg.JWTSecretPath); err != nil {
-		logger.Printf("WARNING: JWT secret file not found: %v", err)
-		logger.Printf("Please ensure %s exists and is readable", cfg.JWTSecretPath)
+	} else {
+		secret, err := getJWTSecret(cfg.JWTSecretPath)
+		if err != nil {
+			logger.Printf("WARNING: JWT secret file not found: %v", err)
+			logger.Printf("Please ensure %s exists and is readable", cfg.JWTSecretPath)
+		}
+		// Cached once here; every request reads cfg.JWTSecret from memory
+		// instead of hitting the disk (see auth.go / server.go). If the
+		// secret couldn't be read, cfg.JWTSecret stays "" and validateJWT
+		// will correctly reject every token until the server is restarted
+		// with a valid secret file.
+		cfg.JWTSecret = secret
 	}
 
 	hub := NewHub()

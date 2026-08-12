@@ -44,6 +44,11 @@ type Config struct {
 	NoAuth             bool   `json:"no_auth"`
 	UDPWaitWarnSec     int    `json:"udp_wait_warn_sec"`
 	StatsIntervalSec   int    `json:"stats_interval_sec"`
+
+	// JWTSecret is the in-memory cache of the secret read from
+	// JWTSecretPath once at startup. Deliberately excluded from JSON so it
+	// never ends up in a config file. See main.go / auth.go.
+	JWTSecret string `json:"-"`
 }
 
 func loadConfig(configPath string) (*Config, error) {

@@ -35,6 +35,14 @@ type wsConn struct {
 	done         chan struct{}
 	logger       *log.Logger
 	pingSentAt   atomic.Int64 // unix nano; 0 means no ping outstanding
+
+	// connMu serializes every actual conn.Write call. writeLoop isn't the
+	// only place that writes to the socket: Hub.CloseAll and readLoop's
+	// close-frame reply (opcode 0x8) also write directly. c.mu only guards
+	// the `closed` flag, so without a separate lock here those direct
+	// writes can physically interleave on the wire with a concurrent
+	// writeLoop write, corrupting frames. connMu prevents that.
+	connMu sync.Mutex
 }
 
 func upgradeWS(w http.ResponseWriter, r *http.Request, logger *log.Logger) (*wsConn, error) {
@@ -128,6 +136,8 @@ func (c *wsConn) writeLoop() {
 // everything else goes through writeFrame for normal framing.
 func (c *wsConn) writeMessage(msg wsMessage) error {
 	if msg.raw {
+		c.connMu.Lock()
+		defer c.connMu.Unlock()
 		c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 		_, err := c.conn.Write(msg.data)
 		return err
@@ -166,6 +176,8 @@ func (c *wsConn) writeFrame(data []byte, isText bool, opcode ...byte) error {
 	copy(frame, header[:hLen])
 	copy(frame[hLen:], data)
 
+	c.connMu.Lock()
+	defer c.connMu.Unlock()
 	c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
 	_, err := c.conn.Write(frame)
 	return err
@@ -337,8 +349,10 @@ func (c *wsConn) readLoop() {
 		switch opcode {
 		case 0x8:
 			closeFrame := []byte{0x88, 0x00}
+			c.connMu.Lock()
 			c.conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
 			c.conn.Write(closeFrame)
+			c.connMu.Unlock()
 			return
 		case 0x9:
 			// Build the raw Pong frame (header + echoed payload) and hand it

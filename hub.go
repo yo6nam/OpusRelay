@@ -42,14 +42,23 @@ func (h *Hub) CloseAll() {
 
 	for _, c := range clients {
 		c.mu.Lock()
-		if !c.closed {
-			closeFrame := []byte{0x88, 0x02, 0x03, 0xE8} // 1000 Normal Closure
-			c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-			c.conn.Write(closeFrame)
-			c.closed = true
-			c.conn.Close()
-		}
+		alreadyClosed := c.closed
+		c.closed = true
 		c.mu.Unlock()
+		if alreadyClosed {
+			continue
+		}
+
+		// The physical write goes through connMu, the same lock writeLoop
+		// uses for its own conn.Write calls, so this can't interleave with
+		// a write still in flight on another goroutine (see websocket.go).
+		closeFrame := []byte{0x88, 0x02, 0x03, 0xE8} // 1000 Normal Closure
+		c.connMu.Lock()
+		c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		c.conn.Write(closeFrame)
+		c.connMu.Unlock()
+
+		c.conn.Close()
 	}
 }
 
