@@ -76,7 +76,7 @@ func loadConfig(configPath string) (*Config, error) {
 	}
 
 	if configPath != "" {
-		file, err := os.Open(configPath)
+		file, err := os.Open(configPath) // #nosec G304 -- configPath comes from the -config CLI flag, operator-supplied, not remote input
 		if err == nil {
 			defer file.Close()
 			decoder := json.NewDecoder(file)
@@ -116,7 +116,7 @@ func saveConfigTemplate(path string) error {
 		StatsIntervalSec:   2,
 	}
 
-	file, err := os.Create(path)
+	file, err := os.Create(path) // #nosec G304 -- path comes from the -gen-config CLI flag, operator-supplied, not remote input
 	if err != nil {
 		return err
 	}

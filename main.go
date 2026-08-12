@@ -117,8 +117,9 @@ func main() {
 	mux.Handle("/", securityMiddleware(http.HandlerFunc(wsHandler(*cfg, hub, logger))))
 
 	srv := &http.Server{
-		Addr:    ":" + cfg.WSPort,
-		Handler: mux,
+		Addr:              ":" + cfg.WSPort,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second, // mitigates Slowloris-style slow-header attacks (gosec G112)
 	}
 	if !cfg.NoTLS {
 		srv.TLSConfig = &tls.Config{

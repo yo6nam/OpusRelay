@@ -2,7 +2,7 @@ package main
 
 import (
 	"bufio"
-	"crypto/sha1"
+	"crypto/sha1" // #nosec G505 -- required by RFC 6455 for Sec-WebSocket-Accept; not used for confidentiality/integrity
 	"encoding/base64"
 	"encoding/binary"
 	"fmt"
@@ -53,8 +53,8 @@ func upgradeWS(w http.ResponseWriter, r *http.Request, logger *log.Logger) (*wsC
 	if key == "" {
 		return nil, fmt.Errorf("missing Sec-WebSocket-Key")
 	}
-	h := sha1.New()
-	io.WriteString(h, key+wsGUID)
+	h := sha1.New() // #nosec G401 -- required by RFC 6455 for Sec-WebSocket-Accept; not used for confidentiality/integrity
+	_, _ = io.WriteString(h, key+wsGUID) // hash.Hash.Write never returns a non-nil error, per the io.Writer contract in crypto/*
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 	hj, ok := w.(http.Hijacker)
@@ -70,9 +70,12 @@ func upgradeWS(w http.ResponseWriter, r *http.Request, logger *log.Logger) (*wsC
 		"Upgrade: websocket\r\n" +
 		"Connection: Upgrade\r\n" +
 		"Sec-WebSocket-Accept: " + accept + "\r\n\r\n"
-	buf.WriteString(resp)
+	if _, err := buf.WriteString(resp); err != nil {
+		_ = conn.Close() // best-effort cleanup, we're already returning the original error
+		return nil, err
+	}
 	if err := buf.Flush(); err != nil {
-		conn.Close()
+		_ = conn.Close() // best-effort cleanup, we're already returning the original error
 		return nil, err
 	}
 
@@ -138,7 +141,7 @@ func (c *wsConn) writeMessage(msg wsMessage) error {
 	if msg.raw {
 		c.connMu.Lock()
 		defer c.connMu.Unlock()
-		c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+		_ = c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)) // best-effort; a failure here just surfaces on the Write below
 		_, err := c.conn.Write(msg.data)
 		return err
 	}
@@ -178,7 +181,7 @@ func (c *wsConn) writeFrame(data []byte, isText bool, opcode ...byte) error {
 
 	c.connMu.Lock()
 	defer c.connMu.Unlock()
-	c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
+	_ = c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)) // best-effort; a failure here just surfaces on the Write below
 	_, err := c.conn.Write(frame)
 	return err
 }
@@ -288,7 +291,7 @@ func (c *wsConn) readLoop() {
 	buf := bufio.NewReaderSize(c.conn, 4096)
 
 	for {
-		c.conn.SetReadDeadline(time.Now().Add(idleTimeout))
+		_ = c.conn.SetReadDeadline(time.Now().Add(idleTimeout)) // best-effort; a failure here just surfaces on the ReadByte below
 
 		b0, err := buf.ReadByte()
 		if err != nil {
@@ -345,8 +348,8 @@ func (c *wsConn) readLoop() {
 		case 0x8:
 			closeFrame := []byte{0x88, 0x00}
 			c.connMu.Lock()
-			c.conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond))
-			c.conn.Write(closeFrame)
+			_ = c.conn.SetWriteDeadline(time.Now().Add(200 * time.Millisecond)) // best-effort echo of the close frame; we return right after either way
+			_, _ = c.conn.Write(closeFrame)
 			c.connMu.Unlock()
 			return
 		case 0x9:
@@ -383,6 +386,6 @@ func (c *wsConn) close() {
 	defer c.mu.Unlock()
 	if !c.closed {
 		c.closed = true
-		c.conn.Close()
+		_ = c.conn.Close() // error not actionable here, the connection is going away regardless
 	}
 }

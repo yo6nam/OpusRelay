@@ -18,8 +18,14 @@ type JWTPayload struct {
 	Exp   int64  `json:"exp"`
 }
 
+// getJWTSecret reads the JWT secret from disk. secretFile always comes from
+// -jwtsecret / config.go's JWTSecretPath default — an operator-supplied CLI
+// flag or config file, not remote/user input — so this isn't attacker
+// -controlled path traversal (gosec G304). Called once at startup only; see
+// main.go and Config.JWTSecret for why the server no longer re-reads this
+// file on every request.
 func getJWTSecret(secretFile string) (string, error) {
-	data, err := os.ReadFile(secretFile)
+	data, err := os.ReadFile(secretFile) // #nosec G304 -- operator-supplied path, see doc comment above
 	if err != nil {
 		return "", fmt.Errorf("cannot read JWT secret from %s: %v", secretFile, err)
 	}
@@ -40,7 +46,7 @@ func validateJWT(tokenString string, secret string) (*JWTPayload, error) {
 	}
 
 	signature := hmac.New(sha256.New, []byte(secret))
-	signature.Write([]byte(parts[0] + "." + parts[1]))
+	_, _ = signature.Write([]byte(parts[0] + "." + parts[1])) // hash.Hash.Write never returns a non-nil error, per the io.Writer contract in crypto/*
 	expectedSignature := base64.RawURLEncoding.EncodeToString(signature.Sum(nil))
 
 	if !hmac.Equal([]byte(parts[2]), []byte(expectedSignature)) {

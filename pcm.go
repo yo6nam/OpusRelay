@@ -165,7 +165,7 @@ func pcmListener(cfg Config, hub *Hub, logger *log.Logger) {
 	waitWarnAfter := time.Duration(cfg.UDPWaitWarnSec) * time.Second
 
 	for {
-		conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
+		_ = conn.SetReadDeadline(time.Now().Add(50 * time.Millisecond)) // best-effort; a failure here just surfaces on ReadFrom below
 		n, _, err := conn.ReadFrom(udpBuf)
 		if err != nil {
 			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {

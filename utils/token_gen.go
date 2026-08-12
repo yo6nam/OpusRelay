@@ -46,7 +46,7 @@ func main() {
 	flag.DurationVar(&ttl, "ttl", time.Hour, "Token validity, e.g. 1h, 30m")
 	flag.Parse()
 
-	secretBytes, err := os.ReadFile(secretFile)
+	secretBytes, err := os.ReadFile(secretFile) // #nosec G304 -- secretFile comes from the -secret-file CLI flag of this local test-only tool, not remote input
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cannot read secret file %s: %v\n", secretFile, err)
 		fmt.Fprintf(os.Stderr, "hint: for a local test you can create one with:\n  openssl rand -hex 32 > %s\n", secretFile)
@@ -69,7 +69,7 @@ func main() {
 	signingInput := b64(hBytes) + "." + b64(pBytes)
 
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(signingInput))
+	_, _ = mac.Write([]byte(signingInput)) // hash.Hash.Write never returns a non-nil error, per the io.Writer contract in crypto/*
 	sig := b64(mac.Sum(nil))
 
 	token := signingInput + "." + sig

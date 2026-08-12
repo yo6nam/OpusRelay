@@ -54,11 +54,11 @@ func (h *Hub) CloseAll() {
 		// a write still in flight on another goroutine (see websocket.go).
 		closeFrame := []byte{0x88, 0x02, 0x03, 0xE8} // 1000 Normal Closure
 		c.connMu.Lock()
-		c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond))
-		c.conn.Write(closeFrame)
+		_ = c.conn.SetWriteDeadline(time.Now().Add(500 * time.Millisecond)) // best-effort; nothing actionable if this fails during shutdown
+		_, _ = c.conn.Write(closeFrame)
 		c.connMu.Unlock()
 
-		c.conn.Close()
+		_ = c.conn.Close() // best-effort; nothing actionable if this fails during shutdown
 	}
 }
 

@@ -24,6 +24,9 @@ jobs:
           check-latest: true
 
       # opus.go uses cgo (#cgo LDFLAGS: -lopus) to bind against libopus.
+      # Installed here, before anything that type-checks the code, so every
+      # later step that runs natively on this runner (build, vet, test,
+      # staticcheck, gosec, govulncheck) can see the headers.
       - name: Install libopus (cgo dependency)
         run: |
           sudo apt-get update
@@ -53,10 +56,17 @@ jobs:
           version: latest
           install-go: false
 
+      # Installed via `go install` and run directly (rather than the
+      # securego/gosec Docker action) so it executes natively on this
+      # runner and can see libopus-dev, exactly like the build/vet/test
+      # steps above. The official Docker action runs in its own isolated
+      # container without access to packages installed on the host, which
+      # made it fail to type-check opus.go (cgo import "C").
+      - name: Install gosec
+        run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
       - name: gosec
-        uses: securego/gosec@master
-        with:
-          args: "-exclude-generated ./..."
+        run: gosec -exclude-generated ./...
 
       - name: govulncheck
         uses: golang/govulncheck-action@v1

@@ -71,12 +71,16 @@ func newOpusEncoder(sampleRate, channels, bitrate int, musicMode bool) (*opusEnc
 }
 
 func (e *opusEncoder) Encode(pcm []int16, frameSamples int, out []byte) (int, error) {
-	if len(pcm) == 0 || frameSamples <= 0 {
+	if len(pcm) == 0 || frameSamples <= 0 || len(out) == 0 {
 		return 0, nil
 	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	// #nosec G103 -- unavoidable for cgo: opus_encode needs raw pointers into
+	// the Go-owned pcm/out buffers. Safe here because both len(pcm)==0 and
+	// len(out)==0 are already rejected above, so neither &pcm[0] nor
+	// &out[0] can run on an empty slice.
 	n := C.opus_encode_wrapper(
 		e.ptr,
 		(*C.opus_int16)(unsafe.Pointer(&pcm[0])),
