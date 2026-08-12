@@ -53,8 +53,10 @@ func upgradeWS(w http.ResponseWriter, r *http.Request, logger *log.Logger) (*wsC
 	if key == "" {
 		return nil, fmt.Errorf("missing Sec-WebSocket-Key")
 	}
-	h := sha1.New() // #nosec G401 -- required by RFC 6455 for Sec-WebSocket-Accept; not used for confidentiality/integrity
-	_, _ = io.WriteString(h, key+wsGUID) // hash.Hash.Write never returns a non-nil error, per the io.Writer contract in crypto/*
+	// #nosec G401 -- required by RFC 6455 for Sec-WebSocket-Accept; not used for confidentiality/integrity
+	h := sha1.New()
+	// hash.Hash.Write never returns a non-nil error, per the io.Writer contract in crypto/*
+	_, _ = io.WriteString(h, key+wsGUID)
 	accept := base64.StdEncoding.EncodeToString(h.Sum(nil))
 
 	hj, ok := w.(http.Hijacker)
